@@ -7,13 +7,15 @@
 // NOT stored anywhere by this script — capture them into each agent's
 // workspace TOOLS.md. Only the SHA-256 hash is persisted in the DB.
 //
-// Usage (in pod):  node /tmp/provision-agents.js
+// Usage (in pod):  node /tmp/provision-agents.js [agentname ...]
+//   With no args, provisions the default set. Pass names to add specific agents.
 'use strict';
 const crypto = require('crypto');
 const db = require('/app/src/db');
 const auth = require('/app/src/auth');
 
-const AGENTS = ['sherlock', 'juan', 'botioc'];
+const DEFAULT_AGENTS = ['sherlock', 'juan', 'botioc'];
+const AGENTS = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_AGENTS;
 
 function main() {
   const conn = db.getDb();
