@@ -148,3 +148,11 @@
   - Bearer PATCH card → in-progress works (CSRF-exempt) ✓; no-token PATCH → 401 ✓
 - **Public hostname note:** kanbunny.rossbrigoli.com is behind **Cloudflare Access** (separate Zero Trust gate) → 302 to cloudflareaccess.com before reaching the app. Not a kanbunny issue. Agents use kanbunny.lab internally. Flag to Ross if he wants the public host to use kanbunny's own Dex login instead.
 - **Rollback:** GitOps re-add KANBUNNY_ALLOW_UNAUTH='1' → open mode restored instantly.
+
+## 2026-09-17 02:10 ACST — Provision christina + jobhunter (KB-AUTH-7 addendum)
+- Ross: agent:christina + agent:jobhunter also need Kanbunny tokens.
+- Workspaces: ~/.openclaw/workspace-christina, ~/.openclaw/workspace-jobhunter (both use shared kanbunny skill, no local copy).
+- Made ops/provision-agents.js accept CLI agent names. Ran: `node provision-agents.js christina jobhunter`.
+- Created agent:christina, agent:jobhunter (role=agent). Tokens stored in each TOOLS.md (600).
+- Verified live (enforcement ON): both /auth/me → agent:* via token; 10 boards each.
+- No plaintext tokens in git.
