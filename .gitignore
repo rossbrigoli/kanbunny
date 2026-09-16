@@ -1,0 +1,21 @@
+# Dependencies
+node_modules/
+
+# SQLite databases (live + test artifacts)
+*.db
+*.db-shm
+*.db-wal
+
+# Logs
+*.log
+
+# Environment / secrets
+.env
+.env.*
+
+# Backup databases
+kanbunny.backup-*
+
+# OS / editor noise
+.DS_Store
+*.swp

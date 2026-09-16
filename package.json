@@ -1,0 +1,17 @@
+{
+  "name": "kanbunny",
+  "version": "1.0.0",
+  "description": "Simple Kanban board for project tracking",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js",
+    "dev": "node --watch src/server.js",
+    "test": "node --test tests/*.test.js"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.7.0",
+    "express": "^5.1.0",
+    "openid-client": "^5.7.1",
+    "uuid": "^11.1.0"
+  }
+}

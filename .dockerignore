@@ -1,0 +1,8 @@
+node_modules
+kanbunny*.db
+kanbunny*.db-shm
+kanbunny*.db-wal
+.git
+ops
+WORKLOG.md
+npm-debug.log

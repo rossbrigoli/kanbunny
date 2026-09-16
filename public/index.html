@@ -1,0 +1,229 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Kanbunny</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🐰</text></svg>">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <!-- Mobile hamburger -->
+  <button class="hamburger" id="hamburgerBtn" aria-label="Menu">
+    <span></span><span></span><span></span>
+  </button>
+
+  <!-- Mobile sidebar menu -->
+  <div class="mobile-sidebar" id="mobileSidebar">
+    <div class="mobile-sidebar-header">
+      <h2>🐰 Boards</h2>
+      <button class="mobile-sidebar-close" id="mobileSidebarClose">&times;</button>
+    </div>
+    <div class="mobile-board-list" id="mobileBoardList"></div>
+    <button class="mobile-new-board-btn" id="mobileNewBoardBtn">+ New Board</button>
+  </div>
+  <div class="mobile-sidebar-overlay" id="mobileSidebarOverlay"></div>
+
+  <header>
+    <div class="header-left">
+      <h1>🐰 Kanbunny</h1>
+      <div class="board-tabs" id="boardTabs"></div>
+      <span class="mobile-board-label" id="mobileBoardLabel"></span>
+      <button class="new-board-btn" id="newBoardBtn" title="New Board">+</button>
+    </div>
+    <div class="header-right" id="authControls" style="display:none">
+      <button class="admin-btn" id="adminBtn" onclick="openAdmin()" style="display:none">⚙️ Admin</button>
+      <span class="user-chip" id="userChip"></span>
+      <button class="logout-btn" onclick="logout()">Logout</button>
+    </div>
+  </header>
+
+  <!-- Mobile column selector -->
+  <div class="mobile-col-selector" id="mobileColSelector">
+    <button class="mobile-col-btn active" data-col="all">All</button>
+    <button class="mobile-col-btn" data-col="todo">📋 Todo</button>
+    <button class="mobile-col-btn" data-col="in-progress">🔧 In Progress</button>
+    <button class="mobile-col-btn" data-col="blocked">🚫 Blocked</button>
+    <button class="mobile-col-btn" data-col="in-review">👀 Review</button>
+    <button class="mobile-col-btn" data-col="done">✅ Done</button>
+  </div>
+
+  <!-- Board Options Dropdown -->
+  <div class="board-dropdown" id="boardDropdown">
+    <button class="dropdown-item" data-action="rename">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+      Rename
+    </button>
+    <button class="dropdown-item" data-action="delete">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg>
+      Delete
+    </button>
+  </div>
+
+  <main class="board" id="board">
+    <div class="column" data-column="todo">
+      <div class="column-header">
+        <h2>📋 Todo</h2>
+        <span class="count" id="count-todo">0</span>
+        <button class="add-card-header-btn" onclick="showAddCard('todo')">+</button>
+      </div>
+      <div class="column-body" id="col-todo"
+           ondragover="handleDragOver(event)" ondrop="handleDrop(event, 'todo')"></div>
+    </div>
+
+    <div class="column" data-column="in-progress">
+      <div class="column-header">
+        <h2>🔧 In Progress</h2>
+        <span class="count" id="count-in-progress">0</span>
+        <button class="add-card-header-btn" onclick="showAddCard('in-progress')">+</button>
+      </div>
+      <div class="column-body" id="col-in-progress"
+           ondragover="handleDragOver(event)" ondrop="handleDrop(event, 'in-progress')"></div>
+    </div>
+
+    <div class="column" data-column="blocked">
+      <div class="column-header">
+        <h2>🚫 Blocked</h2>
+        <span class="count" id="count-blocked">0</span>
+        <button class="add-card-header-btn" onclick="showAddCard('blocked')">+</button>
+      </div>
+      <div class="column-body" id="col-blocked"
+           ondragover="handleDragOver(event)" ondrop="handleDrop(event, 'blocked')"></div>
+    </div>
+
+    <div class="column" data-column="in-review">
+      <div class="column-header">
+        <h2>👀 In Review</h2>
+        <span class="count" id="count-in-review">0</span>
+        <button class="add-card-header-btn" onclick="showAddCard('in-review')">+</button>
+      </div>
+      <div class="column-body" id="col-in-review"
+           ondragover="handleDragOver(event)" ondrop="handleDrop(event, 'in-review')"></div>
+    </div>
+
+    <div class="column" data-column="done">
+      <div class="column-header">
+        <h2>✅ Done</h2>
+        <span class="count" id="count-done">0</span>
+        <button class="add-card-header-btn" onclick="showAddCard('done')">+</button>
+      </div>
+      <div class="column-body" id="col-done"
+           ondragover="handleDragOver(event)" ondrop="handleDrop(event, 'done')"></div>
+    </div>
+
+    <!-- Mobile single-column card list -->
+    <div class="mobile-card-list" id="mobileCardList"></div>
+
+    <!-- Mobile add card FAB -->
+    <button class="mobile-fab" id="mobileFab" onclick="showAddCard(mobileViewColumn)" title="Add Card">+</button>
+  </main>
+
+  <!-- Card Modal -->
+  <div class="modal-overlay" id="cardModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3 id="modalTitle">New Card</h3>
+        <button class="modal-close" onclick="closeModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <input type="hidden" id="cardId">
+        <label for="cardTitle">Title</label>
+        <input type="text" id="cardTitle" placeholder="Card title..." autofocus>
+        <label for="cardDescription">Description</label>
+        <textarea id="cardDescription" rows="4" placeholder="Details..."></textarea>
+        <label for="cardAssignee">Assigned To</label>
+        <input type="text" id="cardAssignee" placeholder="e.g. Ross...">
+        <label for="cardPriority">Priority</label>
+        <select id="cardPriority">
+          <option value="">Auto (by position)</option>
+          <option value="1">1 — Critical</option>
+          <option value="2">2 — High</option>
+          <option value="3">3 — Medium</option>
+          <option value="4">4 — Low</option>
+          <option value="5">5 — Backlog</option>
+        </select>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeModal()">Cancel</button>
+        <button class="btn-danger" id="deleteCardBtn" style="display:none" onclick="deleteCard()">Delete</button>
+        <button class="btn-primary" id="saveCardBtn" onclick="saveCard()">Save</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Board Modal -->
+  <div class="modal-overlay" id="boardModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h3>New Board</h3>
+        <button class="modal-close" onclick="closeBoardModal()">&times;</button>
+      </div>
+      <div class="modal-body">
+        <label for="boardName">Board Name</label>
+        <input type="text" id="boardName" placeholder="My Project...">
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeBoardModal()">Cancel</button>
+        <button class="btn-primary" onclick="createBoard()">Create</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- No-access / pending state -->
+  <div class="no-access" id="noAccess" style="display:none">
+    <div class="no-access-card">
+      <h2>🐰 No boards yet</h2>
+      <p>You don't have access to any boards yet.<br>Ask a Kanbunny admin to grant you a board.</p>
+    </div>
+  </div>
+
+  <!-- Admin Modal -->
+  <div class="modal-overlay" id="adminModal">
+    <div class="modal admin-modal">
+      <div class="modal-header">
+        <h3>⚙️ Administration</h3>
+        <button class="modal-close" onclick="closeAdminModal()">&times;</button>
+      </div>
+      <div class="modal-body admin-body">
+        <section>
+          <h4>Users &amp; Roles</h4>
+          <table class="admin-table" id="adminUsersTable">
+            <thead><tr><th>Login</th><th>Role</th></tr></thead>
+            <tbody></tbody>
+          </table>
+        </section>
+        <section>
+          <h4>Board Access — <span id="adminBoardName"></span></h4>
+          <div class="admin-grants" id="adminGrants"></div>
+          <div class="admin-row">
+            <select id="grantUserSelect"></select>
+            <button class="btn-primary" onclick="grantAccess()">Grant</button>
+          </div>
+        </section>
+        <section>
+          <h4>API Tokens (agents &amp; automation)</h4>
+          <table class="admin-table" id="adminTokensTable">
+            <thead><tr><th>Name</th><th>Owner</th><th>Last used</th><th></th></tr></thead>
+            <tbody></tbody>
+          </table>
+          <div class="admin-row">
+            <input type="text" id="tokenName" placeholder="e.g. sherlock-curl">
+            <select id="tokenOwnerSelect"></select>
+            <button class="btn-primary" onclick="createToken()">Create</button>
+          </div>
+          <div class="token-reveal" id="tokenReveal" style="display:none">
+            <p>⚠️ Copy now — it will not be shown again:</p>
+            <code id="tokenPlaintext"></code>
+            <button class="btn-secondary" onclick="copyToken()">Copy</button>
+          </div>
+        </section>
+      </div>
+      <div class="modal-footer">
+        <button class="btn-secondary" onclick="closeAdminModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>

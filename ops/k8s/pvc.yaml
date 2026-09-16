@@ -1,0 +1,13 @@
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: kanbunny-data
+  namespace: kanbunny
+spec:
+  accessModes:
+    - ReadWriteOnce
+  storageClassName: kanbunny-hostpath
+  volumeName: kanbunny-data-optiplex2
+  resources:
+    requests:
+      storage: 1Gi

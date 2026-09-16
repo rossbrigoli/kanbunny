@@ -1,0 +1,85 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kanbunny
+  namespace: kanbunny
+  labels:
+    app: kanbunny
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kanbunny
+  template:
+    metadata:
+      labels:
+        app: kanbunny
+    spec:
+      securityContext:
+        fsGroup: 1000
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - optiplex2
+      containers:
+      - name: kanbunny
+        image: localhost/kanbunny:latest
+        imagePullPolicy: Never
+        ports:
+        - containerPort: 3500
+          name: http
+        env:
+        - name: NODE_ENV
+          value: production
+        - name: PORT
+          value: "3500"
+        - name: HOST
+          value: "0.0.0.0"
+        - name: KANBUNNY_DB_PATH
+          value: /data/kanbunny.db
+        volumeMounts:
+        - name: data
+          mountPath: /data
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "250m"
+        readinessProbe:
+          httpGet:
+            path: /api/boards
+            port: 3500
+          initialDelaySeconds: 5
+          periodSeconds: 10
+        livenessProbe:
+          httpGet:
+            path: /api/boards
+            port: 3500
+          initialDelaySeconds: 15
+          periodSeconds: 30
+      volumes:
+      - name: data
+        persistentVolumeClaim:
+          claimName: kanbunny-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: kanbunny
+  namespace: kanbunny
+spec:
+  selector:
+    app: kanbunny
+  ports:
+  - port: 3500
+    targetPort: 3500
+    nodePort: 30083
+    name: http
+  type: NodePort
