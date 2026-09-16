@@ -108,3 +108,43 @@
   - `tests/auth-enforcement.test.js`: added "agent role sees ALL boards" (promote→see hidden board→revert).
 - **Tests:** `npm test` → **73/73 pass**.
 - **NOT deployed** (this is a code change on top of deployed 2026-09-17-auth). Gate 2 (enforcement flip) NOT touched — awaiting Ross sign-off.
+
+## 2026-09-17 01:45 ACST — VCS baseline + Point 2 deployed (open mode)
+- **VCS baseline (Botioc blocking item):** `git init` on /home/ross/projects/kanbunny.
+  - `.gitignore` added: node_modules/, *.db, *.db-shm, *.db-wal, *.log, .env*, kanbunny.backup-*.
+  - Baseline commit **0ca670f** — 25 files (src, tests, public, ops, docs, Dockerfile, package*). No DBs/secrets/node_modules staged.
+  - No remote created (ask Ross re: GitHub push).
+- **Deploy:** built `brigss007/kanbunny:2026-09-17-auth2` (id 6e7800230dde), pushed to Docker Hub, pre-seeded optiplex2(141)+optiplex(107) via ctr (pull-secret still broken).
+  - GitOps: k3s-cluster **fd67107** (bump image). ArgoCD initially lagged (syncedRev stuck at ec04ef3) → forced `argocd.argoproj.io/refresh: hard` → picked up fd67107.
+- **Verification:**
+  - Deployment image = 2026-09-17-auth2; 2 new pods Running (old terminated, no outage).
+  - KANBUNNY_ALLOW_UNAUTH=1 (Gate 2 still locked).
+  - /healthz 200; open-mode /api/boards + /auth/me OK.
+  - ArgoCD: dex + kanbunny Synced/Healthy @ fd67107.
+- **Gate 2:** NOT touched. No agent rows, no tokens, no enforcement flip.
+
+## 2026-09-17 01:55 ACST — UI fix: invisible header buttons (Ross)
+- **Bug:** `.admin-btn`/`.logout-btn` used `color: inherit` → dark body text on the `var(--accent)` dark-blue header = invisible. `.user-chip` same issue.
+- **Fix (public/style.css):** matched `.new-board-btn` pattern — `color: rgba(255,255,255,0.85)` (chip 0.9), hover `#fff` + brighter border; added transition.
+- **Deploy:** kanbunny commit b1bb295 → image 2026-09-17-auth3 (2aebe5f66f8b) → GitOps 8061572 → ArgoCD hard-refresh → rollout OK.
+- **Verified:** running auth3; served style.css shows white text on both; /healthz 200; dex+kanbunny Synced/Healthy.
+- **Q#2 (open:anonymous):** explained — it's the ALLOW_UNAUTH=1 open-mode short-circuit (authMiddleware assigns OPEN_ADMIN without consulting Dex). GitHub username shows after Gate 2 flip (upsertUserFromOidc stores preferred_username). Not a bug; needs Gate 2 cutover (agent tokens first).
+
+## 2026-09-17 02:05 ACST — Gate 2 CUTOVER COMPLETE (KB-AUTH-7)
+- **Objective:** Provision agent service accounts + tokens, wire into skills, flip enforcement ON.
+- **Ross decisions applied:** agent role sees all boards (no per-board grants); no create-user endpoint (direct DB rows for the 3 fixed agents).
+- **Provisioning (in-pod, ops/provision-agents.js, idempotent):**
+  - Created users agent:sherlock / agent:juan / agent:botioc, role=agent.
+  - Issued tokens sherlock-curl/juan-curl/botioc-curl. Verified token→principal resolution in-pod BEFORE flip.
+  - Tokens stored in each agent's TOOLS.md (mode 600): sherlock, local-worker (Juan), workspace (Botioc).
+- **Skills updated:** shared ~/.openclaw/skills/kanbunny/SKILL.md + sherlock copy — bearer header on every curl, removed "No auth required", added 401-stop rule. Botioc AGENTS.md had no bare curl (descriptive only).
+- **Flip:** removed KANBUNNY_ALLOW_UNAUTH via GitOps k3s-cluster 30340f2 → ArgoCD hard-refresh → rollout OK.
+- **Verification (live, kanbunny.lab):**
+  - ALLOW_UNAUTH env removed ✓
+  - Anonymous /api/boards + /auth/me → 401 ✓
+  - /healthz → 200 (open for probes) ✓
+  - sherlock token /auth/me → {login:agent:sherlock, role:agent, via:token} ✓
+  - juan/botioc tokens → 10 boards each ✓
+  - Bearer PATCH card → in-progress works (CSRF-exempt) ✓; no-token PATCH → 401 ✓
+- **Public hostname note:** kanbunny.rossbrigoli.com is behind **Cloudflare Access** (separate Zero Trust gate) → 302 to cloudflareaccess.com before reaching the app. Not a kanbunny issue. Agents use kanbunny.lab internally. Flag to Ross if he wants the public host to use kanbunny's own Dex login instead.
+- **Rollback:** GitOps re-add KANBUNNY_ALLOW_UNAUTH='1' → open mode restored instantly.
