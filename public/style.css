@@ -1125,19 +1125,23 @@ column[data-column="done"] .column-header::before {
   padding: 4px 10px;
   border-radius: 12px;
   background: rgba(255, 255, 255, 0.12);
+  color: rgba(255, 255, 255, 0.9);
   white-space: nowrap;
 }
 .admin-btn, .logout-btn {
-  border: 1px solid rgba(255, 255, 255, 0.25);
+  border: 1px solid rgba(255, 255, 255, 0.3);
   background: transparent;
-  color: inherit;
+  color: rgba(255, 255, 255, 0.85);
   border-radius: 8px;
   padding: 5px 12px;
   cursor: pointer;
   font-size: 13px;
+  transition: all 0.15s;
 }
 .admin-btn:hover, .logout-btn:hover {
-  background: rgba(255, 255, 255, 0.15);
+  background: rgba(255, 255, 255, 0.12);
+  color: #fff;
+  border-color: rgba(255, 255, 255, 0.5);
 }
 
 /* ── No-access state ───────────────────────────── */
