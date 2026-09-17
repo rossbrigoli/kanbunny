@@ -37,6 +37,140 @@ const MIGRATIONS_DIR = path.join(__dirname, '..', 'migrations');
 const MIGRATION_ADVISORY_LOCK_KEY = 7748321; // arbitrary, stable across replicas
 const BOARD_WRITE_ADVISORY_LOCK_NS = 7748322;
 
+// ---------------------------------------------------------------------------
+// Connection resilience (KB-PG-4 — HA Postgres cutover, 2026-09-18)
+//
+// Three rules drive every number below:
+//   1. A request is never left hanging through a Patroni failover. Every wait
+//      is bounded, and the bound is seconds, not minutes.
+//   2. A statement that may have reached the server is NEVER retried. Retries
+//      happen only while *acquiring* a connection, where no write can have
+//      landed. Retrying an issued INSERT/UPDATE after a half-failed failover
+//      is how you get duplicate card_numbers.
+//   3. One stuck lock holder never serialises a whole board behind it.
+//
+// Driver fact this rests on (verified in the vendored source, not folklore):
+//   node_modules/pg-pool/index.js:192-266 (pg 8.23) — `connectionTimeoutMillis`
+//   bounds BOTH the checkout wait for a client from a full/idle pool AND the
+//   establishment of a brand-new client (socket destroy / forced end). One knob
+//   covers both paths, so neither can wait unbounded.
+//   node_modules/pg/lib/connection-parameters.js:151 — `options` is forwarded
+//   in the PostgreSQL startup message, so session GUCs are applied by the
+//   server at connect time with no extra round trip and no post-connect race.
+// ---------------------------------------------------------------------------
+
+function intEnv(name, fallback) {
+  const raw = process.env[name];
+  if (raw === undefined || raw === '') return fallback;
+  const n = Number.parseInt(raw, 10);
+  if (!Number.isFinite(n) || n < 0) {
+    throw new Error(`invalid ${name}: ${raw} (expected a non-negative integer)`);
+  }
+  return n;
+}
+
+// 2 app replicas x 10 = 20 server connections: comfortably inside PGO's
+// default max_connections even while a failed primary's connections drain.
+const POOL_MAX = intEnv('KANBUNNY_DB_POOL_MAX', 10);
+// Bounds pool checkout AND new-connection setup (see driver note above).
+const ACQUIRE_TIMEOUT_MS = intEnv('KANBUNNY_DB_ACQUIRE_TIMEOUT_MS', 3000);
+const STATEMENT_TIMEOUT_MS = intEnv('KANBUNNY_DB_STATEMENT_TIMEOUT_MS', 10000);
+// Generous: a transaction awaiting an advisory lock is counted here, and we do
+// not want a normal lock wait to look like an idle-in-transaction bug.
+const IDLE_IN_TX_TIMEOUT_MS = intEnv('KANBUNNY_DB_IDLE_IN_TX_TIMEOUT_MS', 60000);
+const IDLE_TIMEOUT_MS = intEnv('KANBUNNY_DB_IDLE_TIMEOUT_MS', 30000);
+const CONNECT_RETRIES = intEnv('KANBUNNY_DB_CONNECT_RETRIES', 3);
+const CONNECT_RETRY_BASE_MS = intEnv('KANBUNNY_DB_CONNECT_RETRY_BASE_MS', 200);
+const CONNECT_RETRY_MAX_MS = intEnv('KANBUNNY_DB_CONNECT_RETRY_MAX_MS', 2000);
+// A board write that cannot get its advisory lock this fast is failed, not
+// queued. Chosen well above observed lock hold times (~ms) and far below
+// "the user is still willing to wait".
+const BOARD_LOCK_TIMEOUT_MS = intEnv('KANBUNNY_DB_BOARD_LOCK_TIMEOUT_MS', 5000);
+const READINESS_TIMEOUT_MS = intEnv('KANBUNNY_DB_READINESS_TIMEOUT_MS', 1500);
+
+// SQLSTATEs meaning "the endpoint/connection is the problem, not the query".
+// During a Patroni promotion these are expected and transient:
+//   57P01 admin_shutdown      — Patroni demoted/stopped the old primary
+//   57P02 crash_shutdown      — backend killed
+//   57P03 cannot_connect_now   — postmaster up but still in archive recovery
+//   53300 too_many_connections — old pod's connections still draining mid-roll
+// 08xxx is the whole connection-exception class.
+const RETRYABLE_SQLSTATES = new Set([
+  '08000', '08001', '08003', '08004', '08006', '08007', '08P01',
+  '57P01', '57P02', '57P03', '53300',
+]);
+
+// OS-level socket errors (Node `err.code`), same category.
+const RETRYABLE_SYSERRORS = new Set([
+  'ECONNREFUSED', 'ECONNRESET', 'ENOTCONN', 'EHOSTUNREACH', 'ENETUNREACH',
+  'ETIMEDOUT', 'EPIPE',
+]);
+
+// Explicitly NOT retryable, listed so a future edit cannot quietly widen the
+// retry net over a constraint violation (which must surface to the caller).
+const NON_RETRYABLE_SQLSTATES = new Set([
+  '23505', // unique_violation
+  '23503', // foreign_key_violation
+  '23514', // check_violation
+  '22000', // data_exception
+  '42501', // insufficient_privilege
+  '42P01', // undefined_table
+  '42703', // undefined_column
+]);
+
+function isRetryableConnectError(err) {
+  if (!err) return false;
+  const code = err.code;
+  if (NON_RETRYABLE_SQLSTATES.has(code)) return false;
+  if (RETRYABLE_SQLSTATES.has(code)) return true;
+  if (RETRYABLE_SYSERRORS.has(code)) return true;
+  // pg-pool's own checkout timeout carries no SQLSTATE, only this message.
+  return /timeout exceeded when trying to connect/i.test(err.message || '');
+}
+
+// Broader classifier for the HTTP layer: "we could not talk to the database",
+// including a connection that died *after* it was handed to us (the classic
+// mid-failover "Connection terminated unexpectedly").
+function isDatabaseUnavailable(err) {
+  if (!err) return false;
+  if (isRetryableConnectError(err)) return true;
+  if (err.code === '55P03') return true; // lock_timeout — failed fast, by design
+  if (err.code === '57014') return false; // statement_timeout — our own cap, not an outage
+  return /connection terminated|end of stream|not queryable|server closed the connection unexpectedly/i.test(
+    err.message || ''
+  );
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// Exponential backoff with half-jitter, capped. Worst-case total for the
+// default 3 retries stays inside ~3.5s — i.e. inside one Patroni election.
+function backoffMs(attempt) {
+  const raw = Math.min(CONNECT_RETRY_MAX_MS, CONNECT_RETRY_BASE_MS * 2 ** attempt);
+  return Math.round(raw / 2 + Math.random() * (raw / 2));
+}
+
+// Acquire a client from `p`, retrying only connection-shaped failures.
+// Takes any object exposing connect() so it is unit-testable without a server.
+async function connectWithRetry(p, { retries = CONNECT_RETRIES, label = 'db' } = {}) {
+  let lastErr;
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      return await p.connect();
+    } catch (err) {
+      lastErr = err;
+      if (!isRetryableConnectError(err) || attempt === retries) break;
+      const wait = backoffMs(attempt);
+      console.warn(
+        `[db] ${label}: connect attempt ${attempt + 1}/${retries + 1} failed ` +
+          `(${err.code || err.message}); retrying in ${wait}ms`
+      );
+      await sleep(wait);
+    }
+  }
+  throw lastErr;
+}
+
 let pool = null;
 let initPromise = null;
 
@@ -90,8 +224,15 @@ async function runMigrations(client) {
 }
 
 async function initialize() {
-  const client = await pool.connect();
+  const client = await connectWithRetry(pool, { label: 'init' });
   try {
+    // Migrations legitimately wait on another replica's advisory lock for as
+    // long as that replica takes. That can exceed any request budget, so this
+    // one session is unbounded while it holds/queues for the lock... and the
+    // bounded defaults are restored before the client goes back to the pool,
+    // so the reset can never leak into request traffic.
+    await client.query('SET statement_timeout = 0');
+    await client.query('SET idle_in_transaction_session_timeout = 0');
     await runMigrations(client);
     // Bootstrap + priority recompute run on THIS client (never via ready(),
     // which would await initialize itself and deadlock).
@@ -101,11 +242,22 @@ async function initialize() {
       await recomputePrioritiesWith(client, b.id);
     }
   } finally {
+    // Best-effort restore; if this fails the connection is broken anyway and
+    // pg-pool will discard it rather than hand it to a request.
+    await client
+      .query(`SET statement_timeout = ${STATEMENT_TIMEOUT_MS}`)
+      .catch(() => {});
+    await client
+      .query(`SET idle_in_transaction_session_timeout = ${IDLE_IN_TX_TIMEOUT_MS}`)
+      .catch(() => {});
     client.release();
   }
 }
 
 // Transaction helper bound to an already-acquired client (no pool checkout).
+// ROLLBACK failure is swallowed deliberately: when the connection is already
+// dead (killed primary), the ROLLBACK error is noise and would mask the root
+// cause. The original error is always what gets rethrown.
 async function withTransactionOn(client, fn) {
   await client.query('BEGIN');
   try {
@@ -113,7 +265,11 @@ async function withTransactionOn(client, fn) {
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // connection already gone; nothing to roll back, keep the real error
+    }
     throw err;
   }
 }
@@ -121,7 +277,49 @@ async function withTransactionOn(client, fn) {
 // Lazily create the pool and run boot-time setup exactly once.
 function getPool() {
   if (!pool) {
-    pool = new Pool({ connectionString: databaseUrl(), max: 10 });
+    pool = new Pool({
+      connectionString: databaseUrl(),
+      max: POOL_MAX,
+      // Bounds BOTH the wait for a client from the pool and the setup of a new
+      // one (pg-pool/index.js:192-266). This is the knob that stops a failover
+      // from turning into a queue of hung requests.
+      connectionTimeoutMillis: ACQUIRE_TIMEOUT_MS,
+      idleTimeoutMillis: IDLE_TIMEOUT_MS,
+      application_name: process.env.KANBUNNY_DB_APP_NAME || 'kanbunny-app',
+      // Applied by the server during startup — no post-connect race, and every
+      // connection is bounded from the moment it exists.
+      options:
+        `-c statement_timeout=${STATEMENT_TIMEOUT_MS}` +
+        ` -c idle_in_transaction_session_timeout=${IDLE_IN_TX_TIMEOUT_MS}`,
+    });
+    // A client can fail while sitting IDLE — the classic case is the primary we
+    // were talking to getting demoted/killed. pg-pool removes the bad client
+    // itself, but it then re-emits on the POOL, and an 'error' event with no
+    // listener becomes an uncaughtException that kills the pod. That would turn
+    // a routine 30s failover into a crash loop, so we absorb it here: the next
+    // checkout simply builds a fresh connection.
+    pool.on('error', (err) => {
+      console.error('[db] idle client error (client discarded):', (err && (err.code || err.message)) || err);
+    });
+    // The one that actually bites during a failover: pg-pool REMOVES its idle
+    // error listener while a client is checked out (pg-pool/index.js:345), so
+    // a FATAL packet from the server — 57P01 "terminating connection due to
+    // administrator command", which is exactly what a demoted Patroni primary
+    // sends to every session — has no handler mid-request and Node converts it
+    // into an uncaughtException. Reproduced locally: the packet lands on the
+    // socket parser with nothing downstream holding it.
+    //
+    // Attaching here (pool 'connect') means one listener per client LIFETIME,
+    // not per checkout, so it never accumulates. This is the safety net, not
+    // the error channel — the request path still gets its own rejected promise.
+    pool.on('connect', (client) => {
+      client.on('error', (err) => {
+        console.error(
+          '[db] client emitted error (connection discarded):',
+          (err && (err.code || err.message)) || err
+        );
+      });
+    });
     initPromise = initialize().catch((err) => {
       // Allow a later call to retry initialization after a transient failure.
       pool.end().catch(() => {});
@@ -139,9 +337,33 @@ async function ready() {
   await initPromise;
 }
 
+// Return a client to the pool. When `err` is connection-shaped, hand it to
+// release(err) so pg-pool DISCARDS the client rather than passing a dead
+// socket to the next request.
+function releaseClient(client, err) {
+  if (err && isDatabaseUnavailable(err)) {
+    client.release(err);
+  } else {
+    client.release();
+  }
+}
+
+// Single statement on a dedicated client. Acquisition is retried (nothing has
+// been sent yet, so a retry cannot duplicate a write); the statement itself is
+// NEVER retried — a retried INSERT after a half-completed failover is exactly
+// how duplicate card_numbers get born.
 async function query(sql, params) {
   await ready();
-  return pool.query(sql, params);
+  const client = await connectWithRetry(pool, { label: 'query' });
+  let failure = null;
+  try {
+    return await client.query(sql, params);
+  } catch (err) {
+    failure = err;
+    throw err;
+  } finally {
+    releaseClient(client, failure);
+  }
 }
 
 // Legacy-compat alias: callers/tests use db.getDb() to reach the connection.
@@ -164,23 +386,44 @@ async function closePool() {
 // inside so they share the transaction.
 async function withTransaction(fn) {
   await ready();
-  const client = await pool.connect();
+  const client = await connectWithRetry(pool, { label: 'tx' });
+  let failure = null;
   try {
     await client.query('BEGIN');
     const result = await fn(client);
     await client.query('COMMIT');
     return result;
   } catch (err) {
-    await client.query('ROLLBACK');
+    failure = err;
+    try {
+      await client.query('ROLLBACK');
+    } catch {
+      // Same as withTransactionOn: never let a failed ROLLBACK hide the cause.
+    }
     throw err;
   } finally {
-    client.release();
+    releaseClient(client, failure);
   }
 }
 
 const COLUMNS_LIST = ['todo', 'in-progress', 'blocked', 'in-review', 'done'];
 
+// Per-board mutual exclusion for card_number / position integrity.
+//
+// pg_advisory_xact_lock (NOT the session-level variant): it is released by the
+// COMMIT/ROLLBACK that ends the write, so a crashed caller cannot strand a lock.
+//
+// SET LOCAL lock_timeout makes the *wait* bounded: if a holder is wedged, the
+// next writer aborts with 55P03 after BOARD_LOCK_TIMEOUT_MS and the request
+// fails fast (503) instead of queueing the board indefinitely.
+//
+// ⚠ This is exactly the semantics that PgBouncer *transaction pooling* destroys
+// — a pooled transaction would not own the session, so two different requests
+// could believe they hold the same board lock at once. Decision A (no pooler)
+// is what keeps this correct; tests/ha-resilience.test.js fails loudly if that
+// ever stops being true.
 async function lockBoardForWrite(exec, boardId) {
+  await exec.query(`SET LOCAL lock_timeout = ${BOARD_LOCK_TIMEOUT_MS}`);
   await exec.query('SELECT pg_advisory_xact_lock($1, hashtext($2))', [
     BOARD_WRITE_ADVISORY_LOCK_NS,
     boardId,
@@ -620,6 +863,33 @@ async function reorderCard(cardId, afterCardId) {
   return result;
 }
 
+// Health check for /readyz: bounded, uses an existing pooled connection, and
+// never triggers boot-time migration work. Returns false (not throws) when the
+// pool is absent or the DB cannot answer inside the budget.
+async function ping(timeoutMs = READINESS_TIMEOUT_MS) {
+  if (!pool) return false;
+  let timer;
+  const probe = (async () => {
+    const client = await pool.connect();
+    try {
+      const { rows } = await client.query('SELECT 1 AS ok');
+      return rows.length === 1 && rows[0].ok === 1;
+    } finally {
+      client.release();
+    }
+  })();
+  const budget = new Promise((resolve) => {
+    timer = setTimeout(() => resolve(false), timeoutMs);
+  });
+  try {
+    return await Promise.race([probe, budget]);
+  } catch (err) {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 module.exports = {
   getPool,
   getDb,
@@ -627,6 +897,23 @@ module.exports = {
   ready,
   withTransaction,
   closePool,
+  ping,
+  lockBoardForWrite,
+  // resilience surface (used by server.js error mapping + tests)
+  isRetryableConnectError,
+  isDatabaseUnavailable,
+  connectWithRetry,
+  backoffMs,
+  CONFIG: {
+    POOL_MAX,
+    ACQUIRE_TIMEOUT_MS,
+    STATEMENT_TIMEOUT_MS,
+    IDLE_IN_TX_TIMEOUT_MS,
+    IDLE_TIMEOUT_MS,
+    CONNECT_RETRIES,
+    BOARD_LOCK_TIMEOUT_MS,
+    READINESS_TIMEOUT_MS,
+  },
   listBoards,
   getBoard,
   createBoard,

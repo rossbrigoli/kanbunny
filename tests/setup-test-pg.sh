@@ -8,7 +8,7 @@
 set -euo pipefail
 
 PG_CONTAINER=${KANBUNNY_TEST_PG_CONTAINER:-kanbunny-pg-test}
-DBS=(kanbunny_test_api kanbunny_test_authz kanbunny_test_auth kanbunny_test_cardref kanbunny_test_debug kanbunny_test_layer kanbunny_test_migration)
+DBS=(kanbunny_test_api kanbunny_test_authz kanbunny_test_auth kanbunny_test_cardref kanbunny_test_debug kanbunny_test_layer kanbunny_test_migration kanbunny_test_hares)
 
 if ! podman exec "$PG_CONTAINER" pg_isready -U kanbunny -q 2>/dev/null; then
   echo "ERROR: test Postgres container '$PG_CONTAINER' is not ready." >&2
