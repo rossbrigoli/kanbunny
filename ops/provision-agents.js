@@ -17,9 +17,8 @@ const auth = require('/app/src/auth');
 const DEFAULT_AGENTS = ['sherlock', 'juan', 'botioc'];
 const AGENTS = process.argv.slice(2).length ? process.argv.slice(2) : DEFAULT_AGENTS;
 
-function main() {
-  const conn = db.getDb();
-  conn.pragma('busy_timeout = 8000'); // don't fight the running app's WAL writer
+async function main() {
+  await db.ready();
 
   const out = {};
   for (const name of AGENTS) {
@@ -27,24 +26,22 @@ function main() {
     const login = `agent:${name}`;
 
     // 1) Ensure the service-account user row exists with role 'agent'.
-    let user = db.getUserById(id);
+    let user = await db.getUserById(id);
     if (!user) {
-      db.upsertUserFromOidc(id, login); // inserts role='user'
-      db.setUserRole(id, 'agent');
-      user = db.getUserById(id);
+      await db.upsertUserFromOidc(id, login); // inserts role='user'
+      await db.setUserRole(id, 'agent');
+      user = await db.getUserById(id);
       console.error(`created user ${id} role=${user.role}`);
     } else if (user.role !== 'agent') {
-      db.setUserRole(id, 'agent');
-      user = db.getUserById(id);
+      await db.setUserRole(id, 'agent');
+      user = await db.getUserById(id);
       console.error(`re-keyed user ${id} role=${user.role}`);
     } else {
       console.error(`user ${id} already present role=agent`);
     }
 
     // 2) Issue a token only if this agent has none yet (idempotent).
-    const existing = db.listApiTokens
-      ? db.listApiTokens().filter((t) => t.owner_id === id)
-      : [];
+    const existing = (await db.listApiTokens()).filter((t) => t.owner_id === id);
     if (existing.length > 0) {
       console.error(`agent ${id} already has ${existing.length} token(s); NOT re-issuing`);
       out[name] = { tokenId: existing[0].id, plaintext: null, note: 'already-issued' };
@@ -52,7 +49,7 @@ function main() {
     }
 
     const plaintext = 'kb_' + crypto.randomBytes(20).toString('hex');
-    const token = db.createApiToken({
+    const token = await db.createApiToken({
       name: `${name}-curl`,
       ownerId: id,
       tokenHash: auth.sha256hex(plaintext),
@@ -63,6 +60,10 @@ function main() {
 
   // Machine-readable result on stdout (capture this).
   process.stdout.write(JSON.stringify(out, null, 2) + '\n');
+  await db.closePool();
 }
 
-main();
+main().catch((err) => {
+  console.error('provision-agents failed:', err);
+  process.exit(1);
+});

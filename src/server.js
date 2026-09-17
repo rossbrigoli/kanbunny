@@ -22,41 +22,41 @@ app.use('/api', auth.csrfMiddleware);
 
 // --- Board Routes ---
 
-app.get('/api/boards', auth.requireAuth, (req, res) => {
-  res.json(db.visibleBoardsFor(req.principal));
+app.get('/api/boards', auth.requireAuth, async (req, res) => {
+  res.json(await db.visibleBoardsFor(req.principal));
 });
 
-app.post('/api/boards', auth.requireAdmin, (req, res) => {
+app.post('/api/boards', auth.requireAdmin, async (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Board name is required' });
-  const board = db.createBoard(name.trim());
+  const board = await db.createBoard(name.trim());
   res.status(201).json(board);
 });
 
-app.get('/api/boards/:id', auth.requireBoardAccess, (req, res) => {
-  const board = db.getBoard(req.params.id);
+app.get('/api/boards/:id', auth.requireBoardAccess, async (req, res) => {
+  const board = await db.getBoard(req.params.id);
   if (!board) return res.status(404).json({ error: 'Board not found' });
   res.json(board);
 });
 
-app.put('/api/boards/:id', auth.requireAdmin, (req, res) => {
+app.put('/api/boards/:id', auth.requireAdmin, async (req, res) => {
   const { name } = req.body;
   if (!name || !name.trim()) return res.status(400).json({ error: 'Board name is required' });
-  const board = db.updateBoard(req.params.id, name.trim());
+  const board = await db.updateBoard(req.params.id, name.trim());
   if (!board) return res.status(404).json({ error: 'Board not found' });
   res.json(board);
 });
 
-app.delete('/api/boards/:id', auth.requireAdmin, (req, res) => {
-  const deleted = db.deleteBoard(req.params.id);
+app.delete('/api/boards/:id', auth.requireAdmin, async (req, res) => {
+  const deleted = await db.deleteBoard(req.params.id);
   if (!deleted) return res.status(404).json({ error: 'Board not found' });
   res.status(204).end();
 });
 
 // --- Card Routes ---
 
-app.get('/api/boards/:boardId/cards', auth.requireBoardAccess, (req, res) => {
-  const board = db.getBoard(req.params.boardId);
+app.get('/api/boards/:boardId/cards', auth.requireBoardAccess, async (req, res) => {
+  const board = await db.getBoard(req.params.boardId);
   if (!board) return res.status(404).json({ error: 'Board not found' });
 
   // `column` and `status` are aliases for filtering by column
@@ -71,11 +71,11 @@ app.get('/api/boards/:boardId/cards', auth.requireBoardAccess, (req, res) => {
     filters.column = value;
   }
 
-  res.json(db.listCards(req.params.boardId, filters));
+  res.json(await db.listCards(req.params.boardId, filters));
 });
 
-app.post('/api/boards/:boardId/cards', auth.requireBoardAccess, (req, res) => {
-  const board = db.getBoard(req.params.boardId);
+app.post('/api/boards/:boardId/cards', auth.requireBoardAccess, async (req, res) => {
+  const board = await db.getBoard(req.params.boardId);
   if (!board) return res.status(404).json({ error: 'Board not found' });
 
   const { title, description, column, assignee, priority } = req.body;
@@ -84,17 +84,17 @@ app.post('/api/boards/:boardId/cards', auth.requireBoardAccess, (req, res) => {
   const validColumns = ['todo', 'in-progress', 'blocked', 'in-review', 'done'];
   const col = (column && validColumns.includes(column)) ? column : 'todo';
 
-  const card = db.createCard(req.params.boardId, title.trim(), description || '', col, assignee || '', priority);
+  const card = await db.createCard(req.params.boardId, title.trim(), description || '', col, assignee || '', priority);
   res.status(201).json(card);
 });
 
-app.get('/api/cards/:id', auth.requireCardAccess, (req, res) => {
-  const card = db.getCard(req.params.id);
+app.get('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
+  const card = await db.getCard(req.params.id);
   if (!card) return res.status(404).json({ error: 'Card not found' });
   res.json(card);
 });
 
-app.patch('/api/cards/:id', auth.requireCardAccess, (req, res) => {
+app.patch('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
   const { title, description, column, assignee, priority } = req.body;
   const updates = {};
   if (title !== undefined) updates.title = title.trim();
@@ -106,47 +106,47 @@ app.patch('/api/cards/:id', auth.requireCardAccess, (req, res) => {
     if (!validColumns.includes(column)) return res.status(400).json({ error: 'Invalid column' });
     updates.column = column;
   }
-  const card = db.updateCard(req.params.id, updates);
+  const card = await db.updateCard(req.params.id, updates);
   if (!card) return res.status(404).json({ error: 'Card not found' });
   res.json(card);
 });
 
-app.put('/api/cards/:id/move', auth.requireCardAccess, (req, res) => {
+app.put('/api/cards/:id/move', auth.requireCardAccess, async (req, res) => {
   const { afterCardId } = req.body;
-  const moved = db.reorderCard(req.params.id, afterCardId);
+  const moved = await db.reorderCard(req.params.id, afterCardId);
   if (!moved) return res.status(400).json({ error: 'Could not move card' });
-  res.json(db.getCard(req.params.id));
+  res.json(await db.getCard(req.params.id));
 });
 
-app.delete('/api/cards/:id', auth.requireCardAccess, (req, res) => {
-  const deleted = db.deleteCard(req.params.id);
+app.delete('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
+  const deleted = await db.deleteCard(req.params.id);
   if (!deleted) return res.status(404).json({ error: 'Card not found' });
   res.status(204).end();
 });
 
-app.post('/api/cards/:id/priority/recompute', auth.requireCardAccess, (req, res) => {
-  const card = db.getCard(req.params.id);
+app.post('/api/cards/:id/priority/recompute', auth.requireCardAccess, async (req, res) => {
+  const card = await db.getCard(req.params.id);
   if (!card) return res.status(404).json({ error: 'Card not found' });
-  db.recomputePriorities(card.board_id);
+  await db.recomputePriorities(card.board_id);
   res.json({ ok: true });
 });
 
-app.post('/api/boards/:boardId/cards/priority/recompute', auth.requireBoardAccess, (req, res) => {
-  const board = db.getBoard(req.params.boardId);
+app.post('/api/boards/:boardId/cards/priority/recompute', auth.requireBoardAccess, async (req, res) => {
+  const board = await db.getBoard(req.params.boardId);
   if (!board) return res.status(404).json({ error: 'Board not found' });
-  db.recomputePriorities(req.params.boardId);
+  await db.recomputePriorities(req.params.boardId);
   res.json({ ok: true });
 });
 
 // --- Admin API (KB-AUTH-4, all requireAdmin) ---
 
-app.get('/api/admin/users', auth.requireAdmin, (req, res) => {
-  res.json(db.listUsers());
+app.get('/api/admin/users', auth.requireAdmin, async (req, res) => {
+  res.json(await db.listUsers());
 });
 
-app.patch('/api/admin/users/:id', auth.requireAdmin, (req, res) => {
+app.patch('/api/admin/users/:id', auth.requireAdmin, async (req, res) => {
   const { role } = req.body || {};
-  const target = db.getUserById(req.params.id);
+  const target = await db.getUserById(req.params.id);
   if (!target) return res.status(404).json({ error: 'User not found' });
   if (!['admin', 'user', 'agent'].includes(role)) {
     return res.status(400).json({ error: 'Invalid role' });
@@ -154,46 +154,46 @@ app.patch('/api/admin/users/:id', auth.requireAdmin, (req, res) => {
   // Lockout guard: never remove the last admin (self-demotion allowed while
   // another admin exists).
   if (target.role === 'admin' && role !== 'admin') {
-    const admins = db.listUsers().filter((u) => u.role === 'admin');
+    const admins = (await db.listUsers()).filter((u) => u.role === 'admin');
     if (admins.length <= 1) {
       return res.status(409).json({ error: 'cannot_demote_last_admin' });
     }
   }
-  res.json(db.setUserRole(target.id, role));
+  res.json(await db.setUserRole(target.id, role));
 });
 
-app.get('/api/admin/boards/:id/members', auth.requireAdmin, (req, res) => {
-  const board = db.getBoard(req.params.id);
+app.get('/api/admin/boards/:id/members', auth.requireAdmin, async (req, res) => {
+  const board = await db.getBoard(req.params.id);
   if (!board) return res.status(404).json({ error: 'Board not found' });
-  res.json(db.listBoardMembers(req.params.id));
+  res.json(await db.listBoardMembers(req.params.id));
 });
 
-app.post('/api/admin/boards/:id/members', auth.requireAdmin, (req, res) => {
-  const board = db.getBoard(req.params.id);
+app.post('/api/admin/boards/:id/members', auth.requireAdmin, async (req, res) => {
+  const board = await db.getBoard(req.params.id);
   if (!board) return res.status(404).json({ error: 'Board not found' });
   const { userId } = req.body || {};
-  if (!userId || !db.getUserById(userId)) return res.status(400).json({ error: 'userId is required and must exist' });
-  const added = db.addBoardMember(board.id, userId, req.principal.id);
+  if (!userId || !(await db.getUserById(userId))) return res.status(400).json({ error: 'userId is required and must exist' });
+  const added = await db.addBoardMember(board.id, userId, req.principal.id);
   res.status(added ? 201 : 200).json({ ok: true, added });
 });
 
-app.delete('/api/admin/boards/:id/members/:userId', auth.requireAdmin, (req, res) => {
-  const removed = db.removeBoardMember(req.params.id, req.params.userId);
+app.delete('/api/admin/boards/:id/members/:userId', auth.requireAdmin, async (req, res) => {
+  const removed = await db.removeBoardMember(req.params.id, req.params.userId);
   if (!removed) return res.status(404).json({ error: 'Grant not found' });
   res.status(204).end();
 });
 
-app.get('/api/admin/tokens', auth.requireAdmin, (req, res) => {
-  res.json(db.listApiTokens());
+app.get('/api/admin/tokens', auth.requireAdmin, async (req, res) => {
+  res.json(await db.listApiTokens());
 });
 
-app.post('/api/admin/tokens', auth.requireAdmin, (req, res) => {
+app.post('/api/admin/tokens', auth.requireAdmin, async (req, res) => {
   const { name, ownerId } = req.body || {};
   if (!name || !name.trim()) return res.status(400).json({ error: 'Token name is required' });
-  const owner = ownerId ? db.getUserById(ownerId) : req.principal;
-  if (!db.getUserById(owner.id)) return res.status(400).json({ error: 'Owner not found' });
+  const owner = ownerId ? await db.getUserById(ownerId) : req.principal;
+  if (!(await db.getUserById(owner.id))) return res.status(400).json({ error: 'Owner not found' });
   const plaintext = 'kb_' + crypto.randomBytes(20).toString('hex'); // kb_ + 40 hex
-  const token = db.createApiToken({
+  const token = await db.createApiToken({
     name: name.trim(),
     ownerId: owner.id,
     tokenHash: auth.sha256hex(plaintext),
@@ -202,8 +202,8 @@ app.post('/api/admin/tokens', auth.requireAdmin, (req, res) => {
   res.status(201).json({ token: plaintext, id: token.id, name: token.name, owner_login: owner.login });
 });
 
-app.delete('/api/admin/tokens/:id', auth.requireAdmin, (req, res) => {
-  const deleted = db.deleteApiToken(req.params.id);
+app.delete('/api/admin/tokens/:id', auth.requireAdmin, async (req, res) => {
+  const deleted = await db.deleteApiToken(req.params.id);
   if (!deleted) return res.status(404).json({ error: 'Token not found' });
   res.status(204).end();
 });
@@ -217,13 +217,21 @@ app.use((req, res, next) => {
 });
 
 if (require.main === module) {
-  const server = app.listen(PORT, HOST, () => {
-    const addr = server.address();
-    console.log(`\n  🐰 Kanbunny is running!`);
-    console.log(`  → http://localhost:${PORT}`);
-    console.log(`  → LAN:  http://${addr.address === '::' ? '[::]' : addr.address}:${PORT}`);
-    console.log(`  → API:  http://localhost:${PORT}/api/boards\n`);
-  });
+  // Run migrations/bootstrap before accepting traffic; fail fast on boot errors.
+  db.ready()
+    .then(() => {
+      const server = app.listen(PORT, HOST, () => {
+        const addr = server.address();
+        console.log(`\n  🐰 Kanbunny is running!`);
+        console.log(`  → http://localhost:${PORT}`);
+        console.log(`  → LAN:  http://${addr.address === '::' ? '[::]' : addr.address}:${PORT}`);
+        console.log(`  → API:  http://localhost:${PORT}/api/boards\n`);
+      });
+    })
+    .catch((err) => {
+      console.error('Kanbunny boot failed:', err);
+      process.exit(1);
+    });
 }
 
 module.exports = app;

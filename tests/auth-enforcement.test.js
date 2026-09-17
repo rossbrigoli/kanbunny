@@ -1,10 +1,9 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('node:http');
-const path = require('path');
-const fs = require('fs');
 
-const TEST_DB = path.resolve(__dirname, '..', 'kanbunny.test-authz.db');
+// KB-PG-2: Postgres-backed test DB (reset by tests/setup-test-pg.sh)
+const TEST_PG_URL = 'postgres://kanbunny:kanbunny@127.0.0.1:55432/kanbunny_test_authz';
 let port;
 
 function req(method, urlPath, { body, cookies = '', headers = {} } = {}) {
@@ -71,7 +70,6 @@ async function loginAs(claims) {
   const state = loc.searchParams.get('state');
   const cb = await req('GET', `/auth/callback?code=***&state=${state}`, { cookies: oauth });
   assert.strictEqual(cb.status, 302, 'callback redirects home');
-  console.error('DBG cb:', cb.status, JSON.stringify(cb.headers['set-cookie']), String(cb.body).slice(0,150));
   const session = cookieOf(cb, 'kb_session');
   const csrf = cookieOf(cb, 'kb_csrf');
   assert.ok(session && csrf, 'session + csrf cookies issued');
@@ -87,16 +85,15 @@ describe('Auth enforcement (KB-AUTH-2/3/4)', () => {
   let hiddenCard;
 
   before(async () => {
-    for (const suffix of ['', '-wal', '-shm']) {
-      if (fs.existsSync(TEST_DB + suffix)) fs.unlinkSync(TEST_DB + suffix);
-    }
-    process.env.KANBUNNY_DB_PATH = TEST_DB;
+    process.env.DATABASE_URL = process.env.KANBUNNY_TEST_PG_URL || TEST_PG_URL;
     process.env.KANBUNNY_SESSION_SECRET = 'test-session-secret-0123456789abcdef';
     process.env.KANBUNNY_OIDC_CLIENT_SECRET = 'test-client-secret';
     process.env.KANBUNNY_BOOTSTRAP_ADMINS = 'rossbrigoli';
     delete process.env.KANBUNNY_ALLOW_UNAUTH;
     delete require.cache[require.resolve('../src/db')];
     delete require.cache[require.resolve('../src/server')];
+    const db = require('../src/db');
+    await db.ready();
     const auth = require('../src/auth');
     auth.setClientForTesting(fakeClient);
     const testApp = require('../src/server');
@@ -106,26 +103,20 @@ describe('Auth enforcement (KB-AUTH-2/3/4)', () => {
     });
     port = server.address().port;
 
-    console.error('DBG: server up on', port);
     ross = await loginAs({ sub: 'sub-ross', preferred_username: 'rossbrigoli' });
-    console.error('DBG: ross logged in');
     bob = await loginAs({ sub: 'sub-bob', preferred_username: 'bob' });
-    console.error('DBG: bob logged in');
 
     // Admin fixtures
     grantedBoard = (await req('POST', '/api/boards', { body: { name: 'Granted Board' }, cookies: ross.session + '; ' + ross.csrf, headers: { 'X-Kb-Csrf': ross.csrfValue } })).body;
     hiddenBoard = (await req('POST', '/api/boards', { body: { name: 'Hidden Board' }, cookies: ross.session + '; ' + ross.csrf, headers: { 'X-Kb-Csrf': ross.csrfValue } })).body;
     hiddenCard = (await req('POST', `/api/boards/${hiddenBoard.id}/cards`, { body: { title: 'secret card' }, cookies: ross.session + '; ' + ross.csrf, headers: { 'X-Kb-Csrf': ross.csrfValue } })).body;
-    console.error('DBG: boards created', grantedBoard?.id, hiddenBoard?.id);
-    const gm = await req('POST', `/api/admin/boards/${grantedBoard.id}/members`, { body: { userId: 'sub-bob' }, cookies: ross.session + '; ' + ross.csrf, headers: { 'X-Kb-Csrf': ross.csrfValue } });
-    console.error('DBG: grant', gm.status, JSON.stringify(gm.body));
+    await req('POST', `/api/admin/boards/${grantedBoard.id}/members`, { body: { userId: 'sub-bob' }, cookies: ross.session + '; ' + ross.csrf, headers: { 'X-Kb-Csrf': ross.csrfValue } });
   });
 
-  after(() => {
-    server.close();
-    for (const suffix of ['', '-wal', '-shm']) {
-      if (fs.existsSync(TEST_DB + suffix)) fs.unlinkSync(TEST_DB + suffix);
-    }
+  after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    const db = require('../src/db');
+    await db.closePool();
   });
 
   // ---- KB-AUTH-2: OIDC flow ----
