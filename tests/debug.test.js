@@ -1,20 +1,20 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
-const path = require('path');
-const fs = require('fs');
 
-const TEST_DB = path.resolve(__dirname, '..', 'kanbunny.test-api.db');
-if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+// KB-PG-2: Postgres-backed test DB (reset by tests/setup-test-pg.sh)
+const TEST_PG_URL = 'postgres://kanbunny:kanbunny@127.0.0.1:55432/kanbunny_test_debug';
 
 describe('Debug', () => {
   let server, base;
 
   before(async () => {
-    process.env.KANBUNNY_DB_PATH = TEST_DB;
+    process.env.DATABASE_URL = process.env.KANBUNNY_TEST_PG_URL || TEST_PG_URL;
     process.env.KANBUNNY_ALLOW_UNAUTH = '1'; // legacy pre-cutover behaviour
     delete require.cache[require.resolve('../src/db')];
     delete require.cache[require.resolve('../src/server')];
+    const db = require('../src/db');
+    await db.ready();
     const testApp = require('../src/server');
     await new Promise((resolve, reject) => {
       server = testApp.listen(0, '127.0.0.1', resolve);
@@ -22,18 +22,12 @@ describe('Debug', () => {
     });
     const addr = server.address();
     base = `http://localhost:${addr.port}/api/`;
-    console.log('base =', base);
   });
 
-  after(() => {
-    return new Promise((resolve) => {
-      server.close(() => {
-        ['kanbunny.test-api.db', 'kanbunny.test-api.db-wal', 'kanbunny.test-api.db-shm'].forEach(f => {
-          try { fs.unlinkSync(f); } catch {}
-        });
-        resolve();
-      });
-    });
+  after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    const db = require('../src/db');
+    await db.closePool();
   });
 
   function req(method, relPath, body) {
@@ -66,24 +60,20 @@ describe('Debug', () => {
 
   it('GET boards', async () => {
     const r = await req('GET', 'boards');
-    console.log('GET boards:', r.status, JSON.stringify(r.body).slice(0, 100));
     assert.strictEqual(r.status, 200);
     assert.ok(Array.isArray(r.body));
   });
 
   it('POST board', async () => {
     const r = await req('POST', 'boards', { name: 'Test' });
-    console.log('POST boards:', r.status, JSON.stringify(r.body).slice(0, 100));
     assert.strictEqual(r.status, 201);
     assert.ok(r.body.id);
   });
 
   it('PUT board', async () => {
     const c = await req('POST', 'boards', { name: 'Old' });
-    console.log('create:', c.status, JSON.stringify(c.body).slice(0, 100));
     assert.ok(c.body && c.body.id);
     const r = await req('PUT', `boards/${c.body.id}`, { name: 'New' });
-    console.log('PUT boards:', r.status, JSON.stringify(r.body).slice(0, 100));
     assert.strictEqual(r.status, 200);
     assert.strictEqual(r.body.name, 'New');
   });

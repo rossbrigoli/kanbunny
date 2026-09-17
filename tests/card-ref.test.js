@@ -1,12 +1,9 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
-const path = require('path');
-const fs = require('fs');
 
-const TEST_DB = path.resolve(__dirname, '..', 'kanbunny.test-cardref.db');
-
-if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+// KB-PG-2: Postgres-backed test DB (reset by tests/setup-test-pg.sh)
+const TEST_PG_URL = 'postgres://kanbunny:kanbunny@127.0.0.1:55432/kanbunny_test_cardref';
 
 describe('Card human IDs (ref "X-N")', () => {
   let server;
@@ -14,10 +11,12 @@ describe('Card human IDs (ref "X-N")', () => {
   let boardId;
 
   before(async () => {
-    process.env.KANBUNNY_DB_PATH = TEST_DB;
+    process.env.DATABASE_URL = process.env.KANBUNNY_TEST_PG_URL || TEST_PG_URL;
     process.env.KANBUNNY_ALLOW_UNAUTH = '1'; // legacy pre-cutover behaviour
     delete require.cache[require.resolve('../src/db')];
     delete require.cache[require.resolve('../src/server')];
+    const db = require('../src/db');
+    await db.ready();
     const testApp = require('../src/server');
     await new Promise((resolve, reject) => {
       server = testApp.listen(0, '127.0.0.1', resolve);
@@ -28,15 +27,10 @@ describe('Card human IDs (ref "X-N")', () => {
     boardId = board.id;
   });
 
-  after(() => {
-    return new Promise((resolve) => {
-      server.close(() => {
-        for (const f of [TEST_DB, TEST_DB + '-wal', TEST_DB + '-shm']) {
-          if (fs.existsSync(f)) fs.unlinkSync(f);
-        }
-        resolve();
-      });
-    });
+  after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    const db = require('../src/db');
+    await db.closePool();
   });
 
   function req(method, relPath, body) {

@@ -6,7 +6,7 @@ metadata:
   labels:
     app: kanbunny
 spec:
-  replicas: 1
+  replicas: 2
   selector:
     matchLabels:
       app: kanbunny
@@ -15,8 +15,6 @@ spec:
       labels:
         app: kanbunny
     spec:
-      securityContext:
-        fsGroup: 1000
       affinity:
         nodeAffinity:
           requiredDuringSchedulingIgnoredDuringExecution:
@@ -40,11 +38,11 @@ spec:
           value: "3500"
         - name: HOST
           value: "0.0.0.0"
-        - name: KANBUNNY_DB_PATH
-          value: /data/kanbunny.db
-        volumeMounts:
-        - name: data
-          mountPath: /data
+        - name: DATABASE_URL
+          valueFrom:
+            secretKeyRef:
+              name: kanbunny-postgres
+              key: DATABASE_URL
         resources:
           requests:
             memory: "128Mi"
@@ -54,20 +52,16 @@ spec:
             cpu: "250m"
         readinessProbe:
           httpGet:
-            path: /api/boards
+            path: /healthz
             port: 3500
           initialDelaySeconds: 5
           periodSeconds: 10
         livenessProbe:
           httpGet:
-            path: /api/boards
+            path: /healthz
             port: 3500
           initialDelaySeconds: 15
           periodSeconds: 30
-      volumes:
-      - name: data
-        persistentVolumeClaim:
-          claimName: kanbunny-data
 ---
 apiVersion: v1
 kind: Service

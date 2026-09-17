@@ -1,26 +1,24 @@
 const { describe, it, before, after } = require('node:test');
 const assert = require('node:assert');
 const http = require('http');
-const path = require('path');
-const fs = require('fs');
 
-const TEST_DB = path.resolve(__dirname, '..', 'kanbunny.test-api.db');
-
-// Clean slate
-if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
+// KB-PG-2: Postgres-backed test DB (reset by tests/setup-test-pg.sh)
+const TEST_PG_URL = 'postgres://kanbunny:kanbunny@127.0.0.1:55432/kanbunny_test_api';
 
 describe('API Endpoints', () => {
   let server;
   let base;
 
   before(async () => {
-    process.env.KANBUNNY_DB_PATH = TEST_DB;
+    process.env.DATABASE_URL = process.env.KANBUNNY_TEST_PG_URL || TEST_PG_URL;
     process.env.KANBUNNY_ALLOW_UNAUTH = '1'; // legacy pre-cutover behaviour
 
-    // Clear require cache so modules pick up the test DB path
+    // Clear require cache so modules pick up the test DATABASE_URL
     delete require.cache[require.resolve('../src/db')];
     delete require.cache[require.resolve('../src/server')];
 
+    const db = require('../src/db');
+    await db.ready();
     const testApp = require('../src/server');
 
     // Wait for the server to actually be listening
@@ -33,15 +31,10 @@ describe('API Endpoints', () => {
     base = `http://localhost:${addr.port}/api/`;
   });
 
-  after(() => {
-    return new Promise((resolve) => {
-      server.close(() => {
-        if (fs.existsSync(TEST_DB)) fs.unlinkSync(TEST_DB);
-        if (fs.existsSync(TEST_DB + '-wal')) fs.unlinkSync(TEST_DB + '-wal');
-        if (fs.existsSync(TEST_DB + '-shm')) fs.unlinkSync(TEST_DB + '-shm');
-        resolve();
-      });
-    });
+  after(async () => {
+    await new Promise((resolve) => server.close(resolve));
+    const db = require('../src/db');
+    await db.closePool();
   });
 
   function req(method, relPath, body) {

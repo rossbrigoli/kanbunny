@@ -361,6 +361,9 @@ function cardCardHtml(c) {
                 ondragstart="handleDragStart(event, '${c.id}')"
                 ondragend="handleDragEnd(event)"
                 onclick="openEditCard('${c.id}')">
+    <div class="card-drag-handle" onclick="event.stopPropagation()" aria-label="Drag card to move" title="Drag to move">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="9" cy="5" r="1.7"/><circle cx="15" cy="5" r="1.7"/><circle cx="9" cy="12" r="1.7"/><circle cx="15" cy="12" r="1.7"/><circle cx="9" cy="19" r="1.7"/><circle cx="15" cy="19" r="1.7"/></svg>
+    </div>
     <div class="card-title">${c.ref ? `<span class="card-ref">${escapeHtml(c.ref)}</span> ` : ''}${escapeHtml(c.title)}</div>
     ${c.description ? `<div class="card-desc">${escapeHtml(c.description)}</div>` : ''}
     <div class="card-meta">
@@ -606,6 +609,7 @@ let mobileDragStartY = 0;
 let mobileDragStartX = 0;
 let mobileDragThreshold = 10; // px before we consider it a drag
 let mobileDragActive = false;
+let lastMobileDragEndTs = 0;
 let mobileDragIndicator = null;
 let mobileDragPlaceholder = null;
 
@@ -616,7 +620,10 @@ function initMobileDrag() {
 }
 
 function onMobileDragStart(e) {
-  const cardEl = e.target.closest('.card');
+  // Touch-drag may only start from the dedicated handle so the page can still scroll.
+  const handleEl = e.target.closest('.card-drag-handle');
+  if (!handleEl) return;
+  const cardEl = handleEl.closest('.card');
   if (!cardEl || cardEl.closest('#cardModal') || cardEl.closest('#boardModal')) return;
 
   mobileDragCardId = cardEl.dataset.id;
@@ -777,6 +784,7 @@ function onMobileDragEnd(e) {
   }
 
   // Cleanup
+  if (mobileDragActive) lastMobileDragEndTs = Date.now();
   removeDragIndicator();
   if (mobileDragGhost) {
     mobileDragGhost.remove();
@@ -818,6 +826,8 @@ function showAddCard(column) {
 }
 
 function openEditCard(id) {
+  // Suppress the synthetic click that can fire right after a touch-drag ends.
+  if (Date.now() - lastMobileDragEndTs < 400) return;
   const allCards = Object.values(cards).flat();
   const card = allCards.find((c) => c.id === id);
   if (!card) return;

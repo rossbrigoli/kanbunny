@@ -117,30 +117,30 @@ function getBearerToken(req) {
 
 // Resolve principal from bearer token (hashed lookup, live role) or session JWT
 // (role re-read from DB so demotion/revocation is instant, not TTL-bound).
-function getPrincipal(req) {
+async function getPrincipal(req) {
   const bearer = getBearerToken(req);
   if (bearer) {
-    const hit = db.findPrincipalByTokenHash(sha256hex(bearer));
+    const hit = await db.findPrincipalByTokenHash(sha256hex(bearer));
     if (!hit) return null;
-    db.touchApiToken(hit.token.id);
+    await db.touchApiToken(hit.token.id);
     return { id: hit.user.id, login: hit.user.login, role: hit.user.role, via: 'token', tokenId: hit.token.id };
   }
   const sess = parseCookies(req)[SESSION_COOKIE];
   if (!sess) return null;
   const claims = verifyToken(sess, sessionSecret());
   if (!claims || !claims.sub) return null;
-  const user = db.getUserById(claims.sub);
+  const user = await db.getUserById(claims.sub);
   if (!user) return null;
   return { id: user.id, login: user.login, role: user.role, via: 'session' };
 }
 
 // ---------- middleware ----------
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   if (allowUnauth()) {
     req.principal = OPEN_ADMIN;
     return next();
   }
-  req.principal = getPrincipal(req);
+  req.principal = await getPrincipal(req);
   next();
 }
 
@@ -158,21 +158,21 @@ function requireAdmin(req, res, next) {
 // Board-scoped access: admins and agents pass (agents see all boards per Ross
 // 2026-09-17); others need an explicit grant.
 // 404 (not 403) for non-granted boards — do not leak board existence.
-function requireBoardAccess(req, res, next) {
+async function requireBoardAccess(req, res, next) {
   const boardId = req.params.boardId || req.params.id;
   if (!req.principal) return res.status(401).json({ error: 'unauthenticated', login: '/auth/login' });
   if (db.seesAllBoards(req.principal)) return next();
-  if (db.isBoardMember(boardId, req.principal.id)) return next();
+  if (await db.isBoardMember(boardId, req.principal.id)) return next();
   return res.status(404).json({ error: 'not_found' });
 }
 
 // For /api/cards/:id* — resolve the card's board, then check access.
-function requireCardAccess(req, res, next) {
+async function requireCardAccess(req, res, next) {
   if (!req.principal) return res.status(401).json({ error: 'unauthenticated', login: '/auth/login' });
   if (db.seesAllBoards(req.principal)) return next();
-  const card = db.getCard(req.params.id);
+  const card = await db.getCard(req.params.id);
   if (!card) return res.status(404).json({ error: 'not_found' });
-  if (db.isBoardMember(card.board_id, req.principal.id)) return next();
+  if (await db.isBoardMember(card.board_id, req.principal.id)) return next();
   return res.status(404).json({ error: 'not_found' });
 }
 
@@ -245,7 +245,7 @@ function registerAuthRoutes(app) {
 
       let user;
       try {
-        user = db.upsertUserFromOidc(sub, login);
+        user = await db.upsertUserFromOidc(sub, login);
       } catch (e) {
         if (String(e.message).includes('login_conflict')) {
           return res.status(403).json({ error: 'login_conflict' });
@@ -254,7 +254,7 @@ function registerAuthRoutes(app) {
       }
       // Bootstrap promotion covers logins added to env after the user row exists.
       if (user.role !== 'admin' && db.bootstrapAdminLogins().includes(login)) {
-        user = db.setUserRole(user.id, 'admin');
+        user = await db.setUserRole(user.id, 'admin');
       }
 
       const sessTok = signPayload(

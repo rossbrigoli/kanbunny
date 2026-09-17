@@ -379,8 +379,53 @@ column[data-column="done"] .column-header::before {
   border-radius: var(--radius-sm);
   padding: 8px 12px;
   cursor: grab;
+  position: relative;
   transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease, border-color 0.15s ease;
   box-shadow: 0 1px 2px rgba(0,0,0,0.05);
+}
+
+/* Dedicated drag handle — touch-drag starts here so the card body can scroll */
+.card-drag-handle {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  cursor: grab;
+  touch-action: none; /* let our JS own gestures on the handle, not the scroller */
+  user-select: none;
+  -webkit-user-select: none;
+  border-radius: 8px;
+  color: var(--text-muted);
+  opacity: 0;
+  transition: opacity 0.15s ease, background 0.15s ease;
+  z-index: 2;
+}
+
+.card:hover .card-drag-handle {
+  opacity: 0.55;
+}
+
+.card-drag-handle:hover {
+  opacity: 0.9 !important;
+  background: var(--surface-3);
+}
+
+.card-drag-handle:active {
+  cursor: grabbing;
+}
+
+/* Touch devices (no hover): keep the handle always visible */
+@media (hover: none) {
+  .card-drag-handle {
+    opacity: 0.65;
+  }
+  .card-title, .card-desc {
+    touch-action: pan-y; /* ensure vertical scrolling works on card body */
+  }
 }
 
 .card:hover {
@@ -490,6 +535,7 @@ column[data-column="done"] .column-header::before {
   color: var(--text);
   margin-bottom: 4px;
   line-height: 1.4;
+  padding-right: 30px; /* keep clear of the drag handle */
 }
 
 .card-ref {
