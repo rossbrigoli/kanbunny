@@ -14,6 +14,21 @@ app.use(express.static(path.join(__dirname, '..', 'public')));
 // Unauthenticated health endpoint for k8s probes (auth is enforced on /api/*).
 app.get('/healthz', (_req, res) => res.status(200).json({ ok: true }));
 
+// Readiness is DB-backed and time-bounded (KB-PG-4). During a Patroni failover
+// the pod goes NotReady and K8s stops routing to it, rather than serving 500s
+// from a pool that cannot reach a primary. Liveness (/healthz) deliberately
+// stays DB-free: restarting this pod cannot fix a down database, so coupling
+// liveness to the DB would turn a 30s failover into a restart storm.
+app.get('/readyz', async (_req, res) => {
+  let ok = false;
+  try {
+    ok = await db.ping();
+  } catch {
+    ok = false;
+  }
+  res.status(ok ? 200 : 503).json({ ok });
+});
+
 // Auth: principal resolution for every request (must be registered BEFORE any
 // route that reads req.principal, including /auth/me), CSRF on cookie mutations under /api.
 app.use(auth.authMiddleware);
@@ -214,6 +229,24 @@ app.use((req, res, next) => {
     return res.sendFile(path.join(__dirname, '..', 'public', 'index.html'));
   }
   next();
+});
+
+// --- error mapping (KB-PG-4) ---
+// A database that is mid-failover is 503 + Retry-After, not 500. 500 means
+// "the app is broken"; 503 means "a dependency is briefly unavailable, try
+// again" — and it is the honest answer while Patroni elects a new primary.
+// Registered last so it also catches Express 5's async-rejection forwarding.
+app.use('/api', (err, req, res, next) => {
+  if (res.headersSent) return next(err);
+  if (db.isDatabaseUnavailable(err)) {
+    console.warn(
+      `[api] database unavailable on ${req.method} ${req.path}: ${err.code || err.message}`
+    );
+    res.setHeader('Retry-After', '5');
+    return res.status(503).json({ error: 'database_unavailable' });
+  }
+  console.error(`[api] unhandled error on ${req.method} ${req.path}:`, err);
+  return res.status(500).json({ error: 'internal_error' });
 });
 
 if (require.main === module) {
