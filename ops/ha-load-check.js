@@ -81,6 +81,19 @@ async function api(path, opts = {}) {
     : await api('/api/boards', { method: 'POST', body: JSON.stringify({ name: `HA PROOF ${Date.now()}` }) });
   console.log(`board ${board.id} (${board.name})`);
 
+  // Guard: an explicitly-supplied board must contain NO real (non-test) cards.
+  // On 2026-09-18 a run with --board polluted the real australian-visa board
+  // with 241 `r{round}-c{index}` cards. Refuse rather than learn the lesson twice.
+  if (explicitBoard) {
+    const existing = await api(`/api/boards/${board.id}/cards`);
+    const foreign = existing.filter((c) => !/^r\d+-c\d+$/.test(c.title));
+    if (foreign.length) {
+      console.error(`REFUSING: board ${board.id} contains ${foreign.length} non-test card(s), e.g. "${foreign[0].title}"${foreign[0].ref ? ` (${foreign[0].ref})` : ''}.`);
+      console.error('This test writes synthetic rows. Omit --board to auto-create a dedicated "HA PROOF <ts>" board, or pass a board that holds only test cards.');
+      process.exit(2);
+    }
+  }
+
   const errors = [];
   let created = 0;
 
