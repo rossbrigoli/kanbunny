@@ -116,6 +116,24 @@
 
     <!-- Mobile add card FAB -->
     <button class="mobile-fab" id="mobileFab" onclick="showAddCard(mobileViewColumn)" title="Add Card">+</button>
+
+    <!-- Mobile column drop dock (shown only while touch-dragging, K-26) -->
+    <div class="mobile-drop-dock" id="mobileDropDock" aria-hidden="true">
+      <button class="mobile-drop-chip" data-col="todo" aria-label="Move to Todo">📋 Todo</button>
+      <button class="mobile-drop-chip" data-col="in-progress" aria-label="Move to In Progress">🔧 Doing</button>
+      <button class="mobile-drop-chip" data-col="blocked" aria-label="Move to Blocked">🚫 Blocked</button>
+      <button class="mobile-drop-chip" data-col="in-review" aria-label="Move to Review">👀 Review</button>
+      <button class="mobile-drop-chip" data-col="done" aria-label="Move to Done">✅ Done</button>
+    </div>
+
+    <!-- Mobile move-to bottom sheet (tap fallback, K-26) -->
+    <div class="move-sheet-overlay" id="moveSheetOverlay" onclick="closeMoveSheet()">
+      <div class="move-sheet" onclick="event.stopPropagation()">
+        <div class="move-sheet-title" id="moveSheetTitle">Move card to…</div>
+        <div class="move-sheet-cols" id="moveSheetCols"></div>
+        <button class="move-sheet-cancel" onclick="closeMoveSheet()">Cancel</button>
+      </div>
+    </div>
   </main>
 
   <!-- Card Modal -->

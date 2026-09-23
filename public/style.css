@@ -58,6 +58,21 @@ body {
   display: none;
 }
 
+/* ── Mobile column drop dock (hidden by default) ─── */
+.mobile-drop-dock {
+  display: none;
+}
+
+/* ── Mobile move-to sheet (hidden by default) ────── */
+.move-sheet-overlay {
+  display: none;
+}
+
+/* ── Card move button (mobile only) ──────────────── */
+.card-move-btn {
+  display: none;
+}
+
 /* ── Hamburger (mobile) ─────────────────────────── */
 .hamburger {
   display: none;
@@ -1107,6 +1122,126 @@ column[data-column="done"] .column-header::before {
   }
   .mobile-fab:active {
     transform: scale(0.95);
+  }
+
+  /* Column drop dock shown during touch-drag (K-26) */
+  .mobile-drop-dock {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 900; /* above FAB (50) & board dropdown (200), below drag ghost (1000) */
+    padding: 10px 10px calc(10px + env(safe-area-inset-bottom, 0px));
+    background: var(--surface);
+    border-top: 1px solid var(--border);
+    box-shadow: 0 -4px 16px rgba(23, 43, 77, 0.18);
+    touch-action: none;
+  }
+  .mobile-drop-dock.show {
+    display: grid;
+    /* Auto-wrap: one row on wide phones, 3+2 rows on narrow ones (~320px).
+       A scrollable single row would be unreachable mid-drag because
+       touch-action:none blocks panning on the dock. */
+    grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+    gap: 6px;
+  }
+  .mobile-drop-chip {
+    min-width: 0;
+    text-align: center;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    padding: 10px 12px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--surface-2);
+    color: var(--text-muted);
+    font-size: 0.72rem;
+    font-weight: 600;
+    white-space: nowrap;
+    cursor: pointer;
+    transition: transform 0.1s ease, background 0.1s ease, color 0.1s ease, border-color 0.1s ease;
+  }
+  .mobile-drop-chip.hot {
+    background: var(--accent);
+    border-color: var(--accent-hover);
+    color: #fff;
+    transform: scale(1.08);
+    box-shadow: 0 0 0 2px rgba(0, 82, 204, 0.25);
+  }
+  .mobile-drop-chip.current {
+    opacity: 0.45;
+  }
+
+  /* Move-to bottom sheet (tap fallback, K-26) */
+  .move-sheet-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 950;
+    background: rgba(23, 43, 77, 0.5);
+    align-items: flex-end;
+  }
+  .move-sheet-overlay.active {
+    display: flex;
+  }
+  .move-sheet {
+    width: 100%;
+    background: var(--surface);
+    border-radius: 12px 12px 0 0;
+    padding: 14px 14px calc(14px + env(safe-area-inset-bottom, 0px));
+    box-shadow: 0 -6px 24px rgba(23, 43, 77, 0.25);
+    animation: moveSheetUp 0.18s ease-out;
+  }
+  @keyframes moveSheetUp {
+    from { transform: translateY(100%); }
+    to { transform: translateY(0); }
+  }
+  .move-sheet-title {
+    font-size: 0.8rem;
+    font-weight: 600;
+    color: var(--text-muted);
+    text-align: center;
+    margin-bottom: 10px;
+  }
+  .move-sheet-cols {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .move-sheet-btn {
+    padding: 12px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: 0.85rem;
+    font-weight: 500;
+    text-align: left;
+    cursor: pointer;
+  }
+  .move-sheet-btn:active {
+    background: var(--surface-3);
+  }
+  .move-sheet-btn.current {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .move-sheet-cancel {
+    margin-top: 10px;
+    width: 100%;
+    padding: 12px;
+    border: none;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-muted);
+    font-size: 0.85rem;
+    font-weight: 600;
+    cursor: pointer;
+  }
+
+  /* Move button on cards (mobile only) */
+  .card-move-btn {
+    display: inline-flex;
+    align-items: center;
   }
 
   .mobile-empty {

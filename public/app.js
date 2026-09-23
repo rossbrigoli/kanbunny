@@ -371,6 +371,9 @@ function cardCardHtml(c) {
       ${priorityHtml}
       ${assigneeHtml}
       <div class="card-actions">
+        <button class="card-move-btn" onclick="event.stopPropagation(); openMoveSheet('${c.id}')" title="Move to column" aria-label="Move card to another column">
+          <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 12h14"/><path d="M13 6l6 6-6 6"/></svg>
+        </button>
         <button class="card-edit-btn" onclick="event.stopPropagation(); openEditCard('${c.id}')" title="Edit">
           <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
         </button>
@@ -671,6 +674,22 @@ function onMobileDragMove(e) {
       mobileDragGhost.style.top = (touch.clientY - 30) + 'px';
     }
 
+    // Column drop dock (K-26): visible while dragging; a chip under the
+    // finger takes priority over card-to-card targeting.
+    showMobileDropDock();
+    const hotChip = chipUnderPoint(touch.clientX, touch.clientY);
+    if (hotChip !== dropDockChip) {
+      clearDropDockChip();
+      if (hotChip) {
+        hotChip.classList.add('hot');
+        dropDockChip = hotChip;
+      }
+    }
+    if (hotChip) {
+      removeDragIndicator();
+      return;
+    }
+
     // Find drop target (exclude placeholders and ghost)
     const targetCard = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('.card:not(.drag-placeholder):not(.mobile-drag-ghost)');
     removeDragIndicator();
@@ -695,9 +714,15 @@ function onMobileDragEnd(e) {
 
   if (mobileDragActive) {
     const touch = e.changedTouches[0];
-    const targetCard = document.elementFromPoint(touch.clientX, touch.clientY)?.closest('.card:not(.drag-placeholder)');
+    const chip = chipUnderPoint(touch.clientX, touch.clientY);
+    const targetCard = chip
+      ? null
+      : document.elementFromPoint(touch.clientX, touch.clientY)?.closest('.card:not(.drag-placeholder)');
 
-    if (targetCard && targetCard.dataset.id !== mobileDragCardId) {
+    if (chip) {
+      // Dropped over a column chip in the drop dock
+      commitColumnMove(mobileDragCardId, chip.dataset.col);
+    } else if (targetCard && targetCard.dataset.id !== mobileDragCardId) {
       const rect = targetCard.getBoundingClientRect();
       const midY = rect.top + rect.height / 2;
       const insertAfter = touch.clientY >= midY;
@@ -785,6 +810,7 @@ function onMobileDragEnd(e) {
 
   // Cleanup
   if (mobileDragActive) lastMobileDragEndTs = Date.now();
+  hideMobileDropDock();
   removeDragIndicator();
   if (mobileDragGhost) {
     mobileDragGhost.remove();
@@ -807,6 +833,109 @@ function removeDragIndicator() {
     mobileDragIndicator.remove();
     mobileDragIndicator = null;
   }
+}
+
+// ── Mobile Column Drop Dock + Move Sheet (K-26) ──
+// While a touch-drag is active a fixed bottom dock shows every column as a
+// chip; releasing the card over a chip moves it to that column. The move
+// button on each card opens the same picker as a tap-only bottom sheet.
+let dropDockChip = null;
+let moveSheetCardId = null;
+
+const MOVE_SHEET_COLUMNS = [
+  ['todo', '📋 Todo'],
+  ['in-progress', '🔧 In Progress'],
+  ['blocked', '🚫 Blocked'],
+  ['in-review', '👀 Review'],
+  ['done', '✅ Done'],
+];
+
+function chipUnderPoint(x, y) {
+  const el = document.elementFromPoint(x, y);
+  if (!el) return null;
+  const chip = el.closest('.mobile-drop-chip');
+  return chip && chip.closest('#mobileDropDock') ? chip : null;
+}
+
+function showMobileDropDock() {
+  const dock = $('#mobileDropDock');
+  if (!dock || dock.classList.contains('show')) return;
+  // Dim the column the card already lives in; moving there is a no-op.
+  const card = mobileDragCardId ? findCard(mobileDragCardId) : null;
+  dock.querySelectorAll('.mobile-drop-chip').forEach((chip) => {
+    chip.classList.toggle('current', !!card && chip.dataset.col === card.column);
+  });
+  dock.classList.add('show');
+  dock.setAttribute('aria-hidden', 'false');
+}
+
+function clearDropDockChip() {
+  if (dropDockChip) {
+    dropDockChip.classList.remove('hot');
+    dropDockChip = null;
+  }
+}
+
+function hideMobileDropDock() {
+  const dock = $('#mobileDropDock');
+  clearDropDockChip();
+  if (!dock) return;
+  dock.classList.remove('show');
+  dock.setAttribute('aria-hidden', 'true');
+}
+
+/**
+ * Optimistically move a card to another column, then PATCH the server.
+ * On failure, reload cards so the board snaps back to server truth.
+ */
+async function commitColumnMove(cardId, targetColumn) {
+  const card = findCard(cardId);
+  if (!card || card.column === targetColumn) return;
+  const sourceColumn = card.column;
+
+  cards[sourceColumn] = cards[sourceColumn].filter((c) => c.id !== cardId);
+  card.column = targetColumn;
+  cards[targetColumn].push(card);
+  renderCards(true);
+  updateCardSnapshot();
+
+  try {
+    await api(`/cards/${cardId}`, {
+      method: 'PATCH',
+      body: JSON.stringify({ column: targetColumn }),
+    });
+    await api(`/boards/${currentBoardId}/cards/priority/recompute`, {
+      method: 'POST',
+      body: JSON.stringify({}),
+    }).catch(() => {});
+  } catch (err) {
+    await loadCards();
+    console.error('Move to column failed; reverted to server state:', err);
+  }
+}
+
+function openMoveSheet(cardId) {
+  // Suppress the synthetic click that can fire right after a touch-drag ends.
+  if (Date.now() - lastMobileDragEndTs < 400) return;
+  const card = findCard(cardId);
+  if (!card) return;
+  moveSheetCardId = cardId;
+  $('#moveSheetTitle').textContent = card.ref ? `Move ${escapeHtml(card.ref)} to…` : 'Move card to…';
+  $('#moveSheetCols').innerHTML = MOVE_SHEET_COLUMNS.map(([col, label]) => `
+    <button class="move-sheet-btn${card.column === col ? ' current' : ''}" data-col="${col}"
+            ${card.column === col ? 'disabled' : ''} onclick="pickMoveColumn('${col}')">${label}</button>`).join('');
+  $('#moveSheetOverlay').classList.add('active');
+}
+
+function pickMoveColumn(col) {
+  const id = moveSheetCardId;
+  closeMoveSheet();
+  if (id) commitColumnMove(id, col);
+}
+
+function closeMoveSheet() {
+  moveSheetCardId = null;
+  $('#moveSheetOverlay').classList.remove('active');
 }
 
 // ── Card Modal ────────────────────────────────────
@@ -1114,6 +1243,9 @@ document.addEventListener('touchstart', (e) => {
 }, { passive: true });
 
 document.addEventListener('touchend', (e) => {
+  // Never swipe-navigate during or right after a card drag (K-26).
+  if (mobileDragActive || Date.now() - lastMobileDragEndTs < 400) return;
+
   const dx = e.changedTouches[0].screenX - touchStartX;
   const dy = e.changedTouches[0].screenY - touchStartY;
   // Only horizontal swipes (more horizontal than vertical, and >50px)

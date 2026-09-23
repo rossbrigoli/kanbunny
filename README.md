@@ -24,6 +24,17 @@ KANBUNNY_BOOTSTRAP_ADMINS=rossbrigoli
 
 Schema migrations live in `migrations/` and are applied idempotently at boot through `schema_migrations`.
 
+## Mobile board UX (K-26)
+
+On phones (≤768px) the board renders one column at a time. Two dependency-free mechanisms move cards between columns:
+
+- **Column drop dock** — while a touch-drag is active (started from the card drag handle), a fixed bottom dock shows all five columns as chips. The chip under the finger highlights; releasing over it moves the card there (`PATCH /api/cards/{id}`, optimistic UI, revert via reload on failure). While over the dock, card-to-card targeting is skipped and the page cannot scroll (`touch-action: none`).
+- **Move-to sheet** — every card has a move button (mobile-only) that opens a bottom sheet picker; no dragging required. The card's current column is shown disabled in the sheet.
+
+Swipe navigation is suppressed during and immediately after a card drag so drags don't accidentally change columns. Desktop drag-and-drop is unchanged; all new UI is hidden outside the mobile media query.
+
+Code: `public/app.js` (`showMobileDropDock`/`chipUnderPoint`/`commitColumnMove`/`openMoveSheet`), markup in `public/index.html` (`#mobileDropDock`, `#moveSheetOverlay`), styles in `public/style.css` under `@media (max-width: 768px)`.
+
 ## Development
 
 Install dependencies:
