@@ -160,6 +160,12 @@
           <option value="4">4 — Low</option>
           <option value="5">5 — Backlog</option>
         </select>
+        <div id="commentsSection" style="display:none">
+          <label>Comments <span id="commentsCount" class="comments-count"></span></label>
+          <div id="commentsList" class="comments-list"></div>
+          <textarea id="newComment" rows="2" placeholder="Add a progress update or comment..."></textarea>
+          <button class="btn-secondary" id="addCommentBtn" onclick="addCardComment()" style="margin-top:6px">Add Comment</button>
+        </div>
       </div>
       <div class="modal-footer">
         <button class="btn-secondary" onclick="closeModal()">Cancel</button>
