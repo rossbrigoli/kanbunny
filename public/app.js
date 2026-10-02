@@ -821,6 +821,9 @@ function showAddCard(column) {
   $('#cardAssignee').value = '';
   $('#cardPriority').value = '';
   $('#deleteCardBtn').style.display = 'none';
+  $('#commentsSection').style.display = 'none';
+  $('#commentsList').innerHTML = '';
+  $('#newComment').value = '';
   $('#cardModal').classList.add('active');
   setTimeout(() => $('#cardTitle').focus(), 100);
 }
@@ -840,7 +843,73 @@ function openEditCard(id) {
   $('#cardAssignee').value = card.assignee || '';
   $('#cardPriority').value = card.priority != null ? card.priority : '';
   $('#deleteCardBtn').style.display = 'block';
+  $('#commentsSection').style.display = 'block';
+  loadComments(card.id);
   $('#cardModal').classList.add('active');
+}
+
+// ── Card Comments (K-28) ────────────────────────
+// Append-only progress log. The description is the stable task statement;
+// updates go here. Comments cannot be edited or deleted from the UI.
+async function loadComments(cardId) {
+  try {
+    const comments = await api(`/cards/${cardId}/comments`);
+    renderComments(comments);
+  } catch (e) {
+    $('#commentsList').innerHTML = '<div class="comment-empty">Could not load comments.</div>';
+  }
+}
+
+function renderComments(comments) {
+  const list = $('#commentsList');
+  $('#commentsCount').textContent = comments.length ? `(${comments.length})` : '';
+  if (!comments.length) {
+    list.innerHTML = '<div class="comment-empty">No comments yet.</div>';
+    return;
+  }
+  list.innerHTML = comments
+    .map((c) => {
+      const ts = new Date(c.created_at).toLocaleString();
+      return `<div class="comment">
+        <div class="comment-meta"><strong>${escapeHtml(c.author)}</strong><span class="comment-ts">${escapeHtml(ts)}</span></div>
+        <div class="comment-body"></div>
+      </div>`;
+    })
+    .join('');
+  // Fill bodies via textContent so newlines/HTML are never interpreted.
+  const bodies = list.querySelectorAll('.comment-body');
+  comments.forEach((c, i) => {
+    bodies[i].textContent = c.body;
+  });
+}
+
+async function addCardComment() {
+  const id = $('#cardId').value;
+  const text = $('#newComment').value.trim();
+  if (!id || !text) return;
+  const btn = $('#addCommentBtn');
+  btn.disabled = true;
+  try {
+    const comment = await api(`/cards/${id}/comments`, {
+      method: 'POST',
+      body: JSON.stringify({ body: text }),
+    });
+    $('#newComment').value = '';
+    const list = $('#commentsList');
+    const empty = list.querySelector('.comment-empty');
+    if (empty) empty.remove();
+    const div = document.createElement('div');
+    div.className = 'comment';
+    div.innerHTML =
+      '<div class="comment-meta"><strong></strong><span class="comment-ts"></span></div><div class="comment-body"></div>';
+    div.querySelector('strong').textContent = comment.author;
+    div.querySelector('.comment-ts').textContent = new Date(comment.created_at).toLocaleString();
+    div.querySelector('.comment-body').textContent = comment.body;
+    list.appendChild(div);
+    $('#commentsCount').textContent = `(${list.querySelectorAll('.comment').length})`;
+  } finally {
+    btn.disabled = false;
+  }
 }
 
 function closeModal() {

@@ -111,6 +111,16 @@ app.get('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
 
 app.patch('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
   const { title, description, column, assignee, priority } = req.body;
+  // K-28: the description is the stable task statement. Token-authenticated
+  // agents (the ones that were overwriting it with progress notes) may not
+  // change it at all — progress goes to POST /api/cards/:id/comments.
+  // Browser sessions (Ross) can still edit descriptions.
+  if (description !== undefined && req.principal && req.principal.via === 'token') {
+    return res.status(400).json({
+      error: 'description_immutable_for_agents',
+      hint: `Progress updates go in comments: kb comment ${req.params.id} "your update" (POST /api/cards/${req.params.id}/comments). The description must not change during the card lifecycle.`,
+    });
+  }
   const updates = {};
   if (title !== undefined) updates.title = title.trim();
   if (description !== undefined) updates.description = description;
@@ -124,6 +134,30 @@ app.patch('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
   const card = await db.updateCard(req.params.id, updates);
   if (!card) return res.status(404).json({ error: 'Card not found' });
   res.json(card);
+});
+
+// --- Comment Routes (K-28) ---
+// Append-only progress log per card. See migrations/003_card_comments.sql.
+
+app.get('/api/cards/:id/comments', auth.requireCardAccess, async (req, res) => {
+  const card = await db.getCard(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  res.json(await db.listComments(req.params.id));
+});
+
+app.post('/api/cards/:id/comments', auth.requireCardAccess, async (req, res) => {
+  const card = await db.getCard(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  const bodyText = req.body && req.body.body != null ? String(req.body.body) : '';
+  if (!bodyText.trim()) return res.status(400).json({ error: 'Comment body is required' });
+  if (bodyText.length > 4000) return res.status(400).json({ error: 'Comment too long (max 4000 chars)' });
+  const author = String(
+    (req.body && req.body.author) || (req.principal && req.principal.login) || 'unknown'
+  )
+    .trim()
+    .slice(0, 100);
+  const comment = await db.addComment(req.params.id, author || 'unknown', bodyText.trim());
+  res.status(201).json(comment);
 });
 
 app.put('/api/cards/:id/move', auth.requireCardAccess, async (req, res) => {

@@ -792,6 +792,32 @@ async function updateCard(id, updates) {
   return getCard(id);
 }
 
+// --- Card comments (K-28) ---
+// Append-only progress log. The card description is the stable task statement;
+// comments are where updates go. No update/delete surface: comments are
+// permanent until the card itself is deleted (ON DELETE CASCADE).
+async function listComments(cardId) {
+  const res = await query(
+    'SELECT id, card_id, author, body, created_at FROM card_comments WHERE card_id = $1 ORDER BY created_at ASC, id ASC',
+    [cardId]
+  );
+  return res.rows;
+}
+
+async function addComment(cardId, author, body) {
+  const { v4: uuid } = require('uuid');
+  const res = await query(
+    'INSERT INTO card_comments (id, card_id, author, body) VALUES ($1, $2, $3, $4) RETURNING id, card_id, author, body, created_at',
+    [uuid(), cardId, author, body]
+  );
+  return res.rows[0];
+}
+
+async function countComments(cardId) {
+  const res = await query('SELECT COUNT(*)::int AS n FROM card_comments WHERE card_id = $1', [cardId]);
+  return res.rows[0].n;
+}
+
 async function deleteCard(id) {
   const { rowCount } = await query('DELETE FROM cards WHERE id = $1', [id]);
   return rowCount > 0;
@@ -924,6 +950,9 @@ module.exports = {
   createCard,
   updateCard,
   deleteCard,
+  listComments,
+  addComment,
+  countComments,
   reorderCard,
   recomputePriorities,
   // auth (KB-AUTH-1)
