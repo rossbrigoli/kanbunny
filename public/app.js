@@ -357,6 +357,11 @@ function cardCardHtml(c) {
   const priorityHtml = (c.priority != null && c.priority > 0)
     ? `<span class="card-priority p${c.priority}">${priorityLabel[c.priority] || c.priority}</span>`
     : '';
+  // S-275: 🔗 badge with the count of unsatisfied dependencies (from the
+  // board listing payload — no extra queries per card).
+  const depsHtml = c.dependencies_pending > 0
+    ? `<span class="card-deps-badge" title="${c.dependencies_pending} unsatisfied dependency(ies)">🔗 ${c.dependencies_pending}</span>`
+    : '';
   return `<div class="card" draggable="true" data-id="${c.id}"
                 ondragstart="handleDragStart(event, '${c.id}')"
                 ondragend="handleDragEnd(event)"
@@ -369,6 +374,7 @@ function cardCardHtml(c) {
     <div class="card-meta">
       <span>${created}</span>
       ${priorityHtml}
+      ${depsHtml}
       ${assigneeHtml}
       <div class="card-actions">
         <button class="card-move-btn" onclick="event.stopPropagation(); openMoveSheet('${c.id}')" title="Move to column" aria-label="Move card to another column">
@@ -951,6 +957,7 @@ function showAddCard(column) {
   $('#cardPriority').value = '';
   $('#deleteCardBtn').style.display = 'none';
   $('#commentsSection').style.display = 'none';
+  $('#dependenciesSection').style.display = 'none';
   $('#commentsList').innerHTML = '';
   $('#newComment').value = '';
   $('#cardModal').classList.add('active');
@@ -974,6 +981,8 @@ function openEditCard(id) {
   $('#deleteCardBtn').style.display = 'block';
   $('#commentsSection').style.display = 'block';
   loadComments(card.id);
+  $('#dependenciesSection').style.display = 'block';
+  loadDependencies(card.id);
   $('#cardModal').classList.add('active');
 }
 
@@ -1044,6 +1053,195 @@ async function addCardComment() {
 function closeModal() {
   $('#cardModal').classList.remove('active');
 }
+
+// ── Card Dependencies (S-275) ───────────────────
+// depends-on list (with remove in session mode), read-only dependents list,
+// and a debounced search box to add new dependencies by ref or title.
+const DEP_COLUMN_LABELS = {
+  'todo': '📋 Todo',
+  'in-progress': '🔧 In Progress',
+  'blocked': '🚫 Blocked',
+  'in-review': '👀 Review',
+  'done': '✅ Done',
+};
+
+let depSearchTimer = null;
+
+function isSessionMode() {
+  return !!currentUser && currentUser.via !== 'token';
+}
+
+async function loadDependencies(cardId) {
+  try {
+    const data = await api(`/cards/${cardId}/dependencies`);
+    renderDependencies(data);
+  } catch (e) {
+    $('#depsDependsOnList').innerHTML = '<div class="comment-empty">Could not load dependencies.</div>';
+  }
+}
+
+function depItemEl(dep, { removable }) {
+  const row = document.createElement('div');
+  row.className = 'dep-item' + (dep.column === 'done' ? ' dep-satisfied' : '');
+
+  const refEl = document.createElement('span');
+  refEl.className = 'dep-ref';
+  refEl.textContent = dep.ref || '(no ref)';
+
+  const titleEl = document.createElement('span');
+  titleEl.className = 'dep-title';
+  titleEl.textContent = dep.title;
+
+  const colEl = document.createElement('span');
+  colEl.className = 'dep-col dep-col-' + dep.column;
+  colEl.textContent = DEP_COLUMN_LABELS[dep.column] || dep.column;
+
+  const openBtn = document.createElement('button');
+  openBtn.className = 'dep-open-btn';
+  openBtn.title = 'Open card';
+  openBtn.textContent = '↗';
+  openBtn.addEventListener('click', () => openDepCard(dep));
+
+  row.append(refEl, titleEl, colEl, openBtn);
+
+  if (removable && isSessionMode()) {
+    const rm = document.createElement('button');
+    rm.className = 'dep-remove-btn';
+    rm.title = 'Remove dependency';
+    rm.textContent = '×';
+    rm.addEventListener('click', () => removeCardDependency(dep.id));
+    row.append(rm);
+  }
+  return row;
+}
+
+function renderDependencies(data) {
+  const dependsOn = data.depends_on || [];
+  const dependents = data.dependents || [];
+  const pending = dependsOn.filter((d) => d.column !== 'done').length;
+  $('#depsCount').textContent = dependsOn.length
+    ? `(${dependsOn.length}${pending ? ' — ' + pending + ' unsatisfied' : ''})`
+    : '';
+
+  const list = $('#depsDependsOnList');
+  list.innerHTML = '';
+  if (!dependsOn.length) {
+    const empty = document.createElement('div');
+    empty.className = 'comment-empty';
+    empty.textContent = 'No dependencies — this card is not waiting on anything.';
+    list.appendChild(empty);
+  } else {
+    dependsOn.forEach((dep) => list.appendChild(depItemEl(dep, { removable: true })));
+  }
+
+  const rd = $('#depsDependentsList');
+  rd.innerHTML = '';
+  if (!dependents.length) {
+    const empty = document.createElement('div');
+    empty.className = 'comment-empty';
+    empty.textContent = 'Nothing depends on this card.';
+    rd.appendChild(empty);
+  } else {
+    dependents.forEach((dep) => rd.appendChild(depItemEl(dep, { removable: false })));
+  }
+}
+
+async function openDepCard(dep) {
+  // Cross-board deps: switch to the target's board first so openEditCard can
+  // find the card in the loaded set.
+  if (dep.board_id !== currentBoardId) {
+    await switchBoard(dep.board_id);
+  }
+  openEditCard(dep.id);
+}
+
+async function removeCardDependency(depCardId) {
+  const cardId = $('#cardId').value;
+  if (!cardId || !depCardId) return;
+  try {
+    await api(`/cards/${cardId}/dependencies/${depCardId}`, { method: 'DELETE' });
+  } catch (e) {
+    alert('Could not remove dependency: ' + e.message);
+  }
+  await loadDependencies(cardId);
+  await loadCards(); // refresh 🔗 badges
+}
+
+async function addCardDependency(targetId) {
+  const cardId = $('#cardId').value;
+  if (!cardId || !targetId) return;
+  try {
+    await api(`/cards/${cardId}/dependencies`, {
+      method: 'POST',
+      body: JSON.stringify({ depends_on: targetId }),
+    });
+    $('#depSearchInput').value = '';
+    hideDepResults();
+    await loadDependencies(cardId);
+    await loadCards(); // refresh 🔗 badges
+  } catch (e) {
+    alert('Could not add dependency: ' + e.message);
+  }
+}
+
+function hideDepResults() {
+  const box = $('#depSearchResults');
+  box.style.display = 'none';
+  box.innerHTML = '';
+}
+
+function renderDepResults(results) {
+  const box = $('#depSearchResults');
+  box.innerHTML = '';
+  if (!results.length) {
+    const empty = document.createElement('div');
+    empty.className = 'dep-search-empty';
+    empty.textContent = 'No matching cards.';
+    box.appendChild(empty);
+  } else {
+    const cardId = $('#cardId').value;
+    results.forEach((r) => {
+      const item = document.createElement('button');
+      item.className = 'dep-search-item';
+      const ref = document.createElement('span');
+      ref.className = 'dep-ref';
+      ref.textContent = r.ref || '(no ref)';
+      const title = document.createElement('span');
+      title.className = 'dep-title';
+      title.textContent = r.title;
+      const col = document.createElement('span');
+      col.className = 'dep-col dep-col-' + r.column;
+      col.textContent = DEP_COLUMN_LABELS[r.column] || r.column;
+      item.append(ref, title, col);
+      item.addEventListener('click', () => addCardDependency(r.id));
+      if (r.id === cardId) item.disabled = true;
+      box.appendChild(item);
+    });
+  }
+  box.style.display = 'block';
+}
+
+$('#depSearchInput').addEventListener('input', (e) => {
+  const q = e.target.value.trim();
+  if (depSearchTimer) clearTimeout(depSearchTimer);
+  if (!q) { hideDepResults(); return; }
+  depSearchTimer = setTimeout(async () => {
+    try {
+      const results = await api(`/cards/search?q=${encodeURIComponent(q)}`);
+      renderDepResults(results);
+    } catch (_) {
+      hideDepResults();
+    }
+  }, 250);
+});
+
+// Close the search dropdown on outside click or Escape.
+document.addEventListener('click', (e) => {
+  if (!e.target.closest('.dep-add-row')) hideDepResults();
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape') hideDepResults();
+});
 
 async function saveCard() {
   const id = $('#cardId').value;

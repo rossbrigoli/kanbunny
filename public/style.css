@@ -1434,3 +1434,91 @@ column[data-column="done"] .column-header::before {
 .comment-ts { color: #999; white-space: nowrap; }
 .comment-body { margin-top: 3px; white-space: pre-wrap; word-break: break-word; font-size: 0.92em; }
 .comment-empty { color: #999; font-style: italic; font-size: 0.9em; }
+
+/* ── Card Dependencies (S-275) ─────────────────── */
+.deps-list {
+  max-height: 160px;
+  overflow-y: auto;
+  border: 1px solid #e2e2e8;
+  border-radius: 8px;
+  padding: 6px 8px;
+  margin-bottom: 6px;
+  background: #fafafc;
+}
+.deps-list-readonly { background: #f4f4f8; }
+.deps-sublabel { font-size: 0.8em; color: #777; margin: 6px 0 2px; font-weight: 600; }
+.dep-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 0;
+  border-bottom: 1px solid #ececf2;
+  font-size: 0.9em;
+}
+.dep-item:last-child { border-bottom: none; }
+.dep-item.dep-satisfied .dep-title { color: #999; text-decoration: line-through; }
+.dep-ref { font-weight: 700; color: #5b5bd6; white-space: nowrap; }
+.dep-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.dep-col {
+  font-size: 0.78em;
+  padding: 1px 7px;
+  border-radius: 10px;
+  white-space: nowrap;
+  background: #ececf2;
+}
+.dep-col-todo { background: #e8e8f0; }
+.dep-col-in-progress { background: #fff3d6; }
+.dep-col-blocked { background: #fde2e2; }
+.dep-col-in-review { background: #e2ecfd; }
+.dep-col-done { background: #ddf3e2; }
+.dep-open-btn, .dep-remove-btn {
+  border: none;
+  background: transparent;
+  cursor: pointer;
+  font-size: 1em;
+  color: #666;
+  padding: 2px 5px;
+  border-radius: 4px;
+  line-height: 1;
+}
+.dep-open-btn:hover { background: #e8e8f0; color: #333; }
+.dep-remove-btn:hover { background: #fde2e2; color: #c0392b; }
+.dep-add-row { position: relative; margin-top: 6px; }
+.dep-add-row input { width: 100%; box-sizing: border-box; }
+.dep-search-results {
+  position: absolute;
+  z-index: 30;
+  left: 0;
+  right: 0;
+  top: calc(100% + 4px);
+  max-height: 220px;
+  overflow-y: auto;
+  background: #fff;
+  border: 1px solid #d8d8e2;
+  border-radius: 8px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.12);
+}
+.dep-search-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  text-align: left;
+  border: none;
+  border-bottom: 1px solid #f0f0f4;
+  background: transparent;
+  padding: 7px 10px;
+  cursor: pointer;
+  font-size: 0.88em;
+}
+.dep-search-item:hover { background: #f2f2fa; }
+.dep-search-item:disabled { opacity: 0.45; cursor: not-allowed; }
+.dep-search-empty { padding: 8px 10px; color: #999; font-style: italic; font-size: 0.88em; }
+.card-deps-badge {
+  font-size: 0.78em;
+  padding: 1px 6px;
+  border-radius: 10px;
+  background: #fff3d6;
+  color: #8a6d1a;
+  white-space: nowrap;
+}

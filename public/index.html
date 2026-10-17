@@ -160,6 +160,16 @@
           <option value="4">4 — Low</option>
           <option value="5">5 — Backlog</option>
         </select>
+        <div id="dependenciesSection" style="display:none">
+          <label>Dependencies <span id="depsCount" class="comments-count"></span></label>
+          <div id="depsDependsOnList" class="deps-list"></div>
+          <div class="deps-sublabel">Needed by</div>
+          <div id="depsDependentsList" class="deps-list deps-list-readonly"></div>
+          <div class="dep-add-row">
+            <input type="text" id="depSearchInput" placeholder="Add dependency — search a card by ref (S-275) or title..." autocomplete="off">
+            <div id="depSearchResults" class="dep-search-results" style="display:none"></div>
+          </div>
+        </div>
         <div id="commentsSection" style="display:none">
           <label>Comments <span id="commentsCount" class="comments-count"></span></label>
           <div id="commentsList" class="comments-list"></div>

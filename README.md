@@ -65,6 +65,38 @@ npm test
 
 `npm test` resets per-file test databases before running.
 
+## Task Dependencies (S-275)
+
+Cards can depend on other cards (`card --depends_on--> target`). A dependency is **satisfied** iff the depended-on card is in column `done`. Cross-board dependencies are allowed. Data lives in `migrations/004_card_dependencies.sql` (`card_dependencies`, both FKs cascade-delete with the card).
+
+### API
+
+| Method | Path | Description |
+|---|---|---|
+| `GET` | `/api/cards/{id}/dependencies` | `{"depends_on":[...], "dependents":[...]}` — each entry has `id`, `ref`, `title`, `column`, `board_id`, `dependency_id`, `dependency_created_at`. |
+| `POST` | `/api/cards/{id}/dependencies` | Body `{"depends_on": "<card-id or ref like S-275>"}` → `201`. Refs resolve case-insensitively; same-board match wins, otherwise a unique global match is required (`409 ambiguous_ref`). |
+| `DELETE` | `/api/cards/{id}/dependencies/{dependsOnCardId}` | `204`, or `404` if the edge does not exist. |
+| `GET` | `/api/cards/search?q=<term>&board_id=<optional>` | Up to 20 cards `{id, ref, title, column, board_id}` — case-insensitive exact ref match (e.g. `s-275`) OR title substring. Non-admin/non-agent principals only see cards on visible boards. |
+
+POST error codes:
+
+- `400 {"error":"self_dependency"}` — a card cannot depend on itself.
+- `400 {"error":"cycle_detected","path":[...]}` — the new edge would close a **transitive** cycle (recursive CTE in `db.addDependency`); `path` is the card-id chain that would loop.
+- `409 {"error":"duplicate_dependency"}` — the edge already exists.
+- `404 {"error":"target_not_found"}` — unknown card id/ref.
+
+### Claim guard (the core rule)
+
+When a **token/bearer-authenticated agent** `PATCH`es a card setting `column` to `in-progress` and the card has ≥1 unsatisfied dependency, the API responds `409 {"error":"dependencies_unsatisfied","blocked":[{id, ref, title, column}...]}` and applies **nothing**. Browser/session principals are never blocked — the same token-vs-session split as the K-28 `description_immutable_for_agents` guard. Moves to other columns are unrestricted.
+
+### Board listing
+
+`GET /api/boards/{id}/cards` includes `dependencies_pending` per card (count of depends-on cards not yet `done`), computed with one correlated subquery — no N+1. The board UI shows a 🔗 badge with that count.
+
+### UI
+
+The card modal has a **Dependencies** section: depends-on list (ref, title, colored column badge, open-card button, `×` remove in session mode), a read-only "Needed by" (dependents) list, and an add row with a debounced (~250 ms) search dropdown hitting `/api/cards/search`. Works on desktop and mobile via the existing modal styles.
+
 ## SQLite To Postgres Migration
 
 The migration utility checkpoints and copies the SQLite database first, then reads the copy read-only and imports rows into Postgres in FK-safe order.

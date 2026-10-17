@@ -677,17 +677,22 @@ const CARD_SELECT_COLUMNS = `cards.*, CASE WHEN cards.card_number IS NULL THEN N
   ELSE substr(upper(ltrim(b.name)), 1, 1) || '-' || cards.card_number::text END AS ref`;
 const CARD_SELECT_FROM = 'FROM cards JOIN boards b ON b.id = cards.board_id';
 
+// Unsatisfied-dependency count per card (a dependency is satisfied iff the
+// depended-on card is in column 'done'). Embedded as a correlated subquery so
+// the board listing stays ONE query instead of N (S-275).
+const DEP_PENDING_SELECT = `(SELECT COUNT(*)::int FROM card_dependencies cd JOIN cards d ON d.id = cd.depends_on_card_id WHERE cd.card_id = cards.id AND d."column" <> 'done') AS dependencies_pending`;
+
 async function listCards(boardId, filters = {}) {
   const { column } = filters;
   if (column) {
     const { rows } = await query(
-      `SELECT ${CARD_SELECT_COLUMNS} ${CARD_SELECT_FROM} WHERE cards.board_id = $1 AND cards."column" = $2 ORDER BY cards.position`,
+      `SELECT ${CARD_SELECT_COLUMNS}, ${DEP_PENDING_SELECT} ${CARD_SELECT_FROM} WHERE cards.board_id = $1 AND cards."column" = $2 ORDER BY cards.position`,
       [boardId, column]
     );
     return rows;
   }
   const { rows } = await query(
-    `SELECT ${CARD_SELECT_COLUMNS} ${CARD_SELECT_FROM} WHERE cards.board_id = $1 ORDER BY cards."column", cards.position`,
+    `SELECT ${CARD_SELECT_COLUMNS}, ${DEP_PENDING_SELECT} ${CARD_SELECT_FROM} WHERE cards.board_id = $1 ORDER BY cards."column", cards.position`,
     [boardId]
   );
   return rows;
@@ -816,6 +821,170 @@ async function addComment(cardId, author, body) {
 async function countComments(cardId) {
   const res = await query('SELECT COUNT(*)::int AS n FROM card_comments WHERE card_id = $1', [cardId]);
   return res.rows[0].n;
+}
+
+// --- Card dependencies (S-275) ---
+// (card_id) --depends_on--> (depends_on_card_id). Satisfied iff the depended
+// card is 'done'. Cross-board edges are allowed. See migrations/004.
+
+// Shared shape for dependency listings: the TARGET card's identity plus the
+// dependency row's own id/created_at. ref uses the same board-prefix +
+// card_number derivation as CARD_SELECT_COLUMNS.
+function depTargetSelect(targetAlias, boardAlias) {
+  const t = targetAlias;
+  const b = boardAlias;
+  return (
+    `cd.id AS dependency_id, cd.created_at AS dependency_created_at, ` +
+    `${t}.id, ${t}.title, ${t}."column", ${t}.board_id, ` +
+    `CASE WHEN ${t}.card_number IS NULL THEN NULL ` +
+    `ELSE substr(upper(ltrim(${b}.name)), 1, 1) || '-' || ${t}.card_number::text END AS ref`
+  );
+}
+
+// Cards this card depends on (what must be done first).
+async function listDependencies(cardId) {
+  const { rows } = await query(
+    `SELECT ${depTargetSelect('c', 'b')} FROM card_dependencies cd ` +
+      `JOIN cards c ON c.id = cd.depends_on_card_id ` +
+      `JOIN boards b ON b.id = c.board_id ` +
+      `WHERE cd.card_id = $1 ORDER BY cd.created_at ASC, cd.id ASC`,
+    [cardId]
+  );
+  return rows;
+}
+
+// Cards that depend on this card (who is waiting on it).
+async function listDependents(cardId) {
+  const { rows } = await query(
+    `SELECT ${depTargetSelect('c', 'b')} FROM card_dependencies cd ` +
+      `JOIN cards c ON c.id = cd.card_id ` +
+      `JOIN boards b ON b.id = c.board_id ` +
+      `WHERE cd.depends_on_card_id = $1 ORDER BY cd.created_at ASC, cd.id ASC`,
+    [cardId]
+  );
+  return rows;
+}
+
+// The unsatisfied depends-on entries for one card (used by the claim guard).
+async function unsatisfiedDependencies(cardId) {
+  const { rows } = await query(
+    `SELECT ${depTargetSelect('c', 'b')} FROM card_dependencies cd ` +
+      `JOIN cards c ON c.id = cd.depends_on_card_id ` +
+      `JOIN boards b ON b.id = c.board_id ` +
+      `WHERE cd.card_id = $1 AND c."column" <> 'done' ORDER BY cd.created_at ASC, cd.id ASC`,
+    [cardId]
+  );
+  return rows;
+}
+
+// Per-board unsatisfied counts: [{ card_id, pending }] for cards with >=1
+// unsatisfied dependency (single grouped query, S-275).
+async function unsatisfiedCountsByBoard(boardId) {
+  const { rows } = await query(
+    `SELECT cd.card_id, COUNT(*)::int AS pending ` +
+      `FROM card_dependencies cd ` +
+      `JOIN cards s ON s.id = cd.card_id ` +
+      `JOIN cards d ON d.id = cd.depends_on_card_id ` +
+      `WHERE s.board_id = $1 AND d."column" <> 'done' ` +
+      `GROUP BY cd.card_id`,
+    [boardId]
+  );
+  return rows;
+}
+
+// Add cardId -> dependsOnCardId. Rejects self-deps and TRANSITIVE cycles:
+// if dependsOnCardId can already reach cardId through depends_on edges, the
+// new edge would close a loop. The recursive CTE walks the depends-on chain
+// from dependsOnCardId looking for cardId; the path is returned for the error.
+// Depth cap (64) is a runaway guard, not a product limit — real boards do not
+// chain 64 deep, and it keeps the CTE terminating even if data were corrupted.
+async function addDependency(cardId, dependsOnCardId) {
+  if (cardId === dependsOnCardId) {
+    const err = new Error('self_dependency');
+    err.code = 'self_dependency';
+    throw err;
+  }
+  const { rows: cyc } = await query(
+    `WITH RECURSIVE dep_chain(id, path) AS (
+       SELECT $2::text, ARRAY[$1::text, $2::text]
+       UNION ALL
+       SELECT cd.depends_on_card_id, dc.path || cd.depends_on_card_id
+       FROM dep_chain dc
+       JOIN card_dependencies cd ON cd.card_id = dc.id
+       WHERE array_length(dc.path, 1) < 64
+     )
+     SELECT path FROM dep_chain WHERE id = $1 LIMIT 1`,
+    [cardId, dependsOnCardId]
+  );
+  if (cyc.length > 0) {
+    const err = new Error('cycle_detected');
+    err.code = 'cycle_detected';
+    err.path = cyc[0].path;
+    throw err;
+  }
+  const { v4: uuid } = require('uuid');
+  try {
+    await query(
+      'INSERT INTO card_dependencies (id, card_id, depends_on_card_id) VALUES ($1, $2, $3)',
+      [uuid(), cardId, dependsOnCardId]
+    );
+  } catch (e) {
+    if (e.code === '23505') {
+      const err = new Error('duplicate_dependency');
+      err.code = 'duplicate_dependency';
+      throw err;
+    }
+    throw e;
+  }
+  return { id: cardId, depends_on: dependsOnCardId };
+}
+
+async function removeDependency(cardId, dependsOnCardId) {
+  const { rowCount } = await query(
+    'DELETE FROM card_dependencies WHERE card_id = $1 AND depends_on_card_id = $2',
+    [cardId, dependsOnCardId]
+  );
+  return rowCount > 0;
+}
+
+// Escape LIKE wildcards so a user-typed % or _ matches literally (ILIKE is
+// used for the case-insensitive ref equality; without wildcards that is a
+// plain case-insensitive comparison).
+function escapeLike(s) {
+  return String(s).replace(/[\\%_]/g, (c) => '\\' + c);
+}
+
+// Exact (case-insensitive) ref lookup, e.g. "S-275". Multiple boards can share
+// a first letter, so this returns ALL matches and the caller disambiguates.
+async function findCardsByRef(ref) {
+  const { rows } = await query(
+    `SELECT ${CARD_SELECT_COLUMNS} ${CARD_SELECT_FROM} ` +
+      `WHERE (CASE WHEN cards.card_number IS NULL THEN '' ` +
+      `ELSE substr(upper(ltrim(b.name)), 1, 1) || '-' || cards.card_number::text END) ` +
+      `ILIKE $1 LIMIT 10`,
+    [escapeLike(ref)]
+  );
+  return rows;
+}
+
+// Card search for the dependency picker: ref equality (case-insensitive, e.g.
+// "s-275") OR title substring. Optional board scoping. Limit 20.
+async function searchCards(q, { boardId = null, limit = 20 } = {}) {
+  const term = String(q || '').trim();
+  if (!term) return [];
+  const params = [escapeLike(term), `%${escapeLike(term)}%`];
+  let sql =
+    `SELECT ${CARD_SELECT_COLUMNS} ${CARD_SELECT_FROM} ` +
+    `WHERE ((CASE WHEN cards.card_number IS NULL THEN '' ` +
+    `ELSE substr(upper(ltrim(b.name)), 1, 1) || '-' || cards.card_number::text END) ILIKE $1 ` +
+    `OR cards.title ILIKE $2)`;
+  if (boardId) {
+    params.push(boardId);
+    sql += ` AND cards.board_id = $3`;
+  }
+  sql += ` ORDER BY cards."column", cards.position LIMIT ${Number(limit)}`;
+  const { rows } = await query(sql, params);
+  return rows;
 }
 
 async function deleteCard(id) {
@@ -953,6 +1122,15 @@ module.exports = {
   listComments,
   addComment,
   countComments,
+  // dependencies (S-275)
+  listDependencies,
+  listDependents,
+  unsatisfiedDependencies,
+  unsatisfiedCountsByBoard,
+  addDependency,
+  removeDependency,
+  findCardsByRef,
+  searchCards,
   reorderCard,
   recomputePriorities,
   // auth (KB-AUTH-1)

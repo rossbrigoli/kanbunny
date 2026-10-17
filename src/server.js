@@ -103,6 +103,33 @@ app.post('/api/boards/:boardId/cards', auth.requireBoardAccess, async (req, res)
   res.status(201).json(card);
 });
 
+// Card search for the dependency picker (S-275). Registered BEFORE
+// /api/cards/:id so "search" is not swallowed as a card id.
+// Non-admin/non-agent principals only see cards on boards they can see.
+app.get('/api/cards/search', auth.requireAuth, async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  if (!q) return res.status(400).json({ error: 'q is required' });
+  let boardId = req.query.board_id || null;
+  if (boardId) {
+    const board = await db.getBoard(boardId);
+    if (!board) return res.status(404).json({ error: 'Board not found' });
+  }
+  let results = await db.searchCards(q, { boardId });
+  if (!db.seesAllBoards(req.principal)) {
+    const visible = new Set((await db.visibleBoardsFor(req.principal)).map((b) => b.id));
+    results = results.filter((c) => visible.has(c.board_id));
+  }
+  res.json(
+    results.slice(0, 20).map((c) => ({
+      id: c.id,
+      ref: c.ref,
+      title: c.title,
+      column: c.column,
+      board_id: c.board_id,
+    }))
+  );
+});
+
 app.get('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
   const card = await db.getCard(req.params.id);
   if (!card) return res.status(404).json({ error: 'Card not found' });
@@ -131,6 +158,20 @@ app.patch('/api/cards/:id', auth.requireCardAccess, async (req, res) => {
     if (!validColumns.includes(column)) return res.status(400).json({ error: 'Invalid column' });
     updates.column = column;
   }
+  // S-275 claim guard: token-authenticated agents may not start a card that
+  // still has unsatisfied dependencies (depended card not 'done'). Browser
+  // sessions are never blocked — same token-vs-session split as the K-28
+  // description_immutable_for_agents guard above. Checked BEFORE any write:
+  // on 409 nothing is applied.
+  if (updates.column === 'in-progress' && req.principal && req.principal.via === 'token') {
+    const blocked = await db.unsatisfiedDependencies(req.params.id);
+    if (blocked.length > 0) {
+      return res.status(409).json({
+        error: 'dependencies_unsatisfied',
+        blocked: blocked.map((d) => ({ id: d.id, ref: d.ref, title: d.title, column: d.column })),
+      });
+    }
+  }
   const card = await db.updateCard(req.params.id, updates);
   if (!card) return res.status(404).json({ error: 'Card not found' });
   res.json(card);
@@ -158,6 +199,66 @@ app.post('/api/cards/:id/comments', auth.requireCardAccess, async (req, res) => 
     .slice(0, 100);
   const comment = await db.addComment(req.params.id, author || 'unknown', bodyText.trim());
   res.status(201).json(comment);
+});
+
+// --- Dependency Routes (S-275) ---
+// Directed edges: card --depends_on--> target. Satisfied iff target is 'done'.
+// See migrations/004_card_dependencies.sql.
+
+app.get('/api/cards/:id/dependencies', auth.requireCardAccess, async (req, res) => {
+  const card = await db.getCard(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  res.json({
+    depends_on: await db.listDependencies(req.params.id),
+    dependents: await db.listDependents(req.params.id),
+  });
+});
+
+app.post('/api/cards/:id/dependencies', auth.requireCardAccess, async (req, res) => {
+  const card = await db.getCard(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  const raw = String((req.body && req.body.depends_on) || '').trim();
+  if (!raw) return res.status(400).json({ error: 'depends_on is required' });
+
+  // The target may be a card UUID or a human ref like "S-275" / "K-28".
+  let target;
+  if (/^[A-Za-z]-\d+$/.test(raw)) {
+    const matches = await db.findCardsByRef(raw);
+    if (matches.length === 0) return res.status(404).json({ error: 'target_not_found' });
+    // Boards can share a first letter: prefer a match on the same board as
+    // the source card; otherwise require a unique global match.
+    target = matches.find((m) => m.board_id === card.board_id) || (matches.length === 1 ? matches[0] : null);
+    if (!target) {
+      return res
+        .status(409)
+        .json({ error: 'ambiguous_ref', matches: matches.map((m) => ({ id: m.id, ref: m.ref, board_id: m.board_id })) });
+    }
+  } else {
+    target = await db.getCard(raw);
+    if (!target) return res.status(404).json({ error: 'target_not_found' });
+  }
+
+  try {
+    await db.addDependency(card.id, target.id);
+    res.status(201).json({ card_id: card.id, depends_on: target.id });
+  } catch (err) {
+    if (err.code === 'self_dependency') return res.status(400).json({ error: 'self_dependency' });
+    if (err.code === 'cycle_detected') {
+      return res.status(400).json({ error: 'cycle_detected', path: err.path });
+    }
+    if (err.code === 'duplicate_dependency') {
+      return res.status(409).json({ error: 'duplicate_dependency' });
+    }
+    throw err;
+  }
+});
+
+app.delete('/api/cards/:id/dependencies/:dependsOnCardId', auth.requireCardAccess, async (req, res) => {
+  const card = await db.getCard(req.params.id);
+  if (!card) return res.status(404).json({ error: 'Card not found' });
+  const removed = await db.removeDependency(req.params.id, req.params.dependsOnCardId);
+  if (!removed) return res.status(404).json({ error: 'Dependency not found' });
+  res.status(204).end();
 });
 
 app.put('/api/cards/:id/move', auth.requireCardAccess, async (req, res) => {
